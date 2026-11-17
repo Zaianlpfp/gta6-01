@@ -1,0 +1,32 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0a0e1a;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+}
+#wrap {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(1200px 700px at 50% 30%, #16233f 0%, #0a0e1a 70%);
+}
+#game {
+  display: block;
+  width: min(100vw, 177.78vh);
+  height: min(100vh, 56.25vw);
+  background: #1a2b1e;
+  box-shadow: 0 0 60px rgba(0, 0, 0, 0.8);
+  cursor: crosshair;
+}
+#hint {
+  margin-top: 8px;
+  color: #8fa3c8;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  user-select: none;
+}
