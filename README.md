@@ -1,8 +1,8 @@
 # Solmar Bay — Open-World Crime in 3D
 
-[![make.fun bounty](https://img.shields.io/badge/make.fun-bounty-gta6--01-ff2a7a)](https://make.fun/bounty/gta6-01)
-[![Solmar Bay](https://img.shields.io/badge/game-Solmar%20Bay%203D-ff8c42)](https://github.com/Zaianlpfp/gta6-01)
-[![Three.js](https://img.shields.io/badge/engine-Three.js%20r149-2ad4ff)](https://github.com/Zaianlpfp/gta6-01)
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/Zaianlpfp/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/Zaianlpfp/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
 **Solmar Bay** is a 3D open-world crime game for make.fun's
 [gta6-01 "Make GTA 6" bounty](https://make.fun/bounty/gta6-01) — a sun-soaked
