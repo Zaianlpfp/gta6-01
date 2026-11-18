@@ -79,8 +79,10 @@ const Missions = {
     AudioSys.missionDone();
     showToast('JOB COMPLETE — ' + def.title.toUpperCase() + '  +' + fmtCash(def.payout) + '  +' + def.xp + ' REP');
     this.showDialog(def.contact, def.portrait, [this.completeLine(def)]);
-    // Weapon unlocks.
-    for (const w of WEAPONS) if (w.unlockMission === def.id + 1) showToast('UNLOCKED: ' + w.name);
+    // Weapon unlocks: toast exactly when the weapon actually unlocks
+    // (Combat.unlocked: missionsDone >= unlockMission — after mission N
+    // completes, missionsDone is N, so the toast fires on def.id, not def.id+1).
+    for (const w of WEAPONS) if (w.unlockMission === def.id) showToast('UNLOCKED: ' + w.name);
     if (def.id === 8) showToast('STORY COMPLETE — you run Solmar Bay now');
     SaveGame.autosave();
     HUD.refreshAll();
