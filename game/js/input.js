@@ -1,44 +1,55 @@
-// Keyboard + mouse state for Solmar Bay. Keys are tracked by code
-// (KeyW, ArrowUp, ...) so layouts never matter; the mouse is tracked in
-// canvas pixels and converted to world coordinates by the camera.
-export class Input {
-  constructor(canvas) {
-    this.keys = {};
-    this.mouseX = 0;
-    this.mouseY = 0;
-    this.mouseDown = false;
-    this.clicked = false; // set true for one frame when the button goes down
-    this.canvas = canvas;
-    window.addEventListener('keydown', (e) => {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
-      if (!e.repeat) this.keys[e.code] = true;
+// Solmar Bay — input.js
+// One job: keyboard + mouse state. WASD/arrows drive, Space is the handbrake,
+// Shift runs, E interacts, 1–4 swap weapons, Q cycles the radio, R reloads,
+// M opens the map, P/Esc pauses. Mouse aims; click fires.
+'use strict';
+
+const Input = {
+  mouseX: 0, mouseY: 0, mouseDown: false,
+
+  init() {
+    // Movement keys held down.
+    addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      const k = e.key.toLowerCase();
+      G.keys[k] = true;
+      if (k === 'e') G.pressed.e = true;
+      if (k === 'q') AudioSys.cycleStation(1);
+      if (k === 'r') Combat.reload();
+      if (k === 'm') HUD.toggleMap();
+      if (k === 'p' || k === 'escape') HUD.togglePause();
+      if (k >= '1' && k <= '4') Combat.select(Number(k) - 1);
+      if (k === ' ') e.preventDefault();
     });
-    window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
-    window.addEventListener('blur', () => { this.keys = {}; this.mouseDown = false; });
-    canvas.addEventListener('mousemove', (e) => {
-      const r = canvas.getBoundingClientRect();
-      this.mouseX = (e.clientX - r.left) * (canvas.width / r.width);
-      this.mouseY = (e.clientY - r.top) * (canvas.height / r.height);
+    addEventListener('keyup', (e) => { G.keys[e.key.toLowerCase()] = false; });
+    addEventListener('mousemove', (e) => {
+      this.mouseX = e.clientX; this.mouseY = e.clientY;
+      if (G.state === 'play' && !Vehicles.playerCar) {
+        // Mouse steers the third-person camera (no pointer lock needed).
+        G.cameraYaw -= (e.movementX || 0) * 0.0035;
+        G.cameraPitch = clamp(G.cameraPitch + (e.movementY || 0) * 0.002, -0.15, 0.5);
+      }
     });
-    canvas.addEventListener('mousedown', (e) => {
-      if (e.button === 0) { this.mouseDown = true; this.clicked = true; }
+    addEventListener('mousedown', (e) => {
+      if (e.button === 0) { this.mouseDown = true; Combat.firing = true; Combat.edge = true; }
     });
-    window.addEventListener('mouseup', (e) => { if (e.button === 0) this.mouseDown = false; });
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-  }
-  down(...codes) { return codes.some((c) => !!this.keys[c]); }
-  pressed(code) {
-    if (this.keys[code]) { this.keys[code] = false; return true; }
-    return false;
-  }
-  // WASD / arrows as a -1..1 pair.
-  axes() {
-    let x = 0, y = 0;
-    if (this.down('KeyA', 'ArrowLeft')) x -= 1;
-    if (this.down('KeyD', 'ArrowRight')) x += 1;
-    if (this.down('KeyW', 'ArrowUp')) y -= 1;
-    if (this.down('KeyS', 'ArrowDown')) y += 1;
-    return { x, y };
-  }
-  endFrame() { this.clicked = false; }
-}
+    addEventListener('mouseup', (e) => {
+      if (e.button === 0) { this.mouseDown = false; Combat.firing = false; }
+    });
+    addEventListener('blur', () => { Combat.firing = false; this.mouseDown = false; });
+    addEventListener('contextmenu', (e) => e.preventDefault());
+  },
+
+  // Snapshot the held keys into the shape the game loop reads.
+  read() {
+    const k = G.keys;
+    return {
+      up: !!(k['w'] || k['arrowup']),
+      down: !!(k['s'] || k['arrowdown']),
+      left: !!(k['a'] || k['arrowleft']),
+      right: !!(k['d'] || k['arrowright']),
+      run: !!k['shift'],
+      handbrake: !!k[' '],
+    };
+  },
+};

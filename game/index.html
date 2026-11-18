@@ -3,15 +3,164 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Bay — A Sun Coast Story</title>
 <link rel="icon" href="data:,">
+<title>Solmar Bay — Open-World Crime</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<div id="wrap">
-  <canvas id="game" width="1280" height="720"></canvas>
-  <div id="hint">WASD move / drive &nbsp;·&nbsp; E enter &amp; steal car &nbsp;·&nbsp; Mouse aim, Click shoot &nbsp;·&nbsp; Space handbrake &nbsp;·&nbsp; Esc pause &nbsp;·&nbsp; M mute</div>
+<div id="game-canvas"></div>
+
+<!-- ============ HUD ============ -->
+<div id="hud" class="hidden">
+  <div id="mission-panel">
+    <div id="m-chapter">CH 1 · STORY 0/8</div>
+    <h2 id="m-title">First Fare</h2>
+    <div id="m-objective">Get in a car</div>
+    <div class="stagebar"><div id="m-stage-fill"></div></div>
+    <div id="m-next">PAYOUT $300</div>
+    <div id="m-timer"></div>
+  </div>
+
+  <div id="response-panel">
+    <div class="resp-head">🚨 SBPD RESPONSE <span id="response-count"></span></div>
+    <div id="response-list"></div>
+  </div>
+
+  <div id="top-right">
+    <div id="clock-line"><span id="day">DAY 1</span> <span id="clock">FRI 17:24</span></div>
+    <div id="cash">$250</div>
+    <div id="stars"></div>
+    <div id="wanted-status"></div>
+  </div>
+
+  <div id="minimap-wrap">
+    <canvas id="minimap" width="190" height="190"></canvas>
+    <div id="location">CORAL STRAND</div>
+    <div class="bar-row"><span class="bar-label">HEALTH</span><div class="bar"><div id="health-fill" class="fill health"></div></div></div>
+    <div class="bar-row"><span class="bar-label">ARMOR</span><div class="bar"><div id="armor-fill" class="fill armor"></div></div></div>
+    <div class="bar-row"><span class="bar-label" id="rep-title">REP 1 · STREET KID</span><div class="bar"><div id="rep-fill" class="fill rep"></div></div><span id="rep-xp">0 / 400</span></div>
+    <div id="coins-label">SUN COINS 0/20</div>
+  </div>
+
+  <div id="dialog" class="hidden">
+    <img id="dlg-img" src="assets/mara.jpg" alt="character portrait">
+    <div class="dlg-body"><div id="dlg-name">MARA SOLIS</div><div id="dlg-text"></div><div class="dlg-hint">click to continue ▸</div></div>
+  </div>
+
+  <div id="weapons"></div>
+
+  <div id="vehicle-panel">
+    <div id="veh-name">SOLSTICE GT</div>
+    <div class="cond-row"><span>CONDITION</span><div class="bar cond"><div id="veh-cond-fill"></div></div><span id="veh-cond-pct">100%</span></div>
+    <div id="speed">0</div><span class="speed-unit">KM/H</span>
+    <div id="gear">N</div>
+  </div>
+
+  <div id="radio-widget">
+    <div id="radio-name">♪ WAVE 88.1 · Neon Drive</div>
+    <div id="radio-track">“Pink Horizon” — Lumen Kids</div>
+    <div class="radio-hint">Q — change station</div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+  <div id="prompt" class="hidden"></div>
+  <div id="hitmarker" class="hidden">✕</div>
+  <div id="crosshair">·</div>
+  <div id="damage-flash" class="hidden"></div>
 </div>
-<script type="module" src="js/main.js"></script>
+
+<!-- ============ FULL MAP ============ -->
+<div id="map-screen" class="hidden">
+  <div class="map-inner">
+    <h2>SOLMAR BAY — CITY MAP</h2>
+    <div class="map-cols">
+      <canvas id="bigmap" width="640" height="480"></canvas>
+      <div class="map-side">
+        <h3>STORY JOBS</h3>
+        <div id="job-list"></div>
+        <h3>LEGEND</h3>
+        <div class="legend">
+          <div><span class="lg gold">◆</span> Job objective / GPS</div>
+          <div><span class="lg green">⌂</span> Safehouse — save point</div>
+          <div><span class="lg yellow">✛</span> Gun store — armor &amp; ammo</div>
+          <div><span class="lg cyan">◐</span> Respray — new paint, −1 star</div>
+          <div><span class="lg red">+</span> Hospital — heal up</div>
+          <div><span class="lg blue">★</span> SBPD Headquarters</div>
+          <div><span class="lg gold">$</span> Bank · <span class="lg gold">⚓</span> Marina / Docks</div>
+        </div>
+        <div id="map-gps">GPS: no active objective</div>
+        <div class="map-hint">Click a job to start it · M / E to close</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SHOP ============ -->
+<div id="shop-screen" class="hidden">
+  <div class="shop-inner">
+    <h2 id="shop-title">MERCADO GUN STORE</h2>
+    <div id="shop-items"></div>
+  </div>
+</div>
+
+<!-- ============ START ============ -->
+<div id="start-screen">
+  <div class="start-inner">
+    <div class="start-kicker">AN OPEN-WORLD CRIME STORY</div>
+    <h1>SOLMAR<br>BAY</h1>
+    <div class="start-sub">Eight jobs. One city. Lose the cops, keep the cash.</div>
+    <div class="start-btns">
+      <button id="btn-new">▶ &nbsp;NEW GAME</button>
+      <button id="btn-continue">↻ &nbsp;CONTINUE</button>
+      <button id="btn-how">? &nbsp;HOW TO PLAY</button>
+    </div>
+    <div id="howto" class="hidden">
+      <b>WASD</b> move / drive &nbsp;·&nbsp; <b>SHIFT</b> run &nbsp;·&nbsp; <b>SPACE</b> handbrake<br>
+      <b>E</b> enter car / interact &nbsp;·&nbsp; <b>MOUSE</b> aim, <b>CLICK</b> shoot<br>
+      <b>1–4</b> weapons &nbsp;·&nbsp; <b>R</b> reload &nbsp;·&nbsp; <b>Q</b> radio &nbsp;·&nbsp; <b>M</b> city map &nbsp;·&nbsp; <b>P</b> pause<br>
+      Steal cars, run jobs for Mara Solis &amp; Dante Voss, dodge the SBPD, collect 20 sun coins.
+    </div>
+    <div class="start-foot">A wholly original game. No affiliation with any commercial title.</div>
+  </div>
+</div>
+
+<!-- ============ PAUSE ============ -->
+<div id="pause-menu" class="hidden">
+  <div class="pause-inner">
+    <h2>PAUSED</h2>
+    <button id="btn-resume">RESUME</button>
+    <button id="btn-save">SAVE GAME</button>
+    <button id="btn-map">CITY MAP</button>
+    <button id="btn-quit">QUIT TO TITLE</button>
+    <div class="pause-hint">WASD drive · E enter car · 1–4 weapons · Q radio · M map</div>
+  </div>
+</div>
+
+<!-- ============ BUSTED / WASTED ============ -->
+<div id="busted-screen" class="hidden">
+  <div class="busted-inner">
+    <h2 id="busted-title">BUSTED</h2>
+    <p id="busted-text"></p>
+    <button id="btn-busted-ok">CONTINUE</button>
+  </div>
+</div>
+
+<script src="vendor/three.min.js"></script>
+<script src="js/util.js"></script>
+<script src="js/config.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/city.js"></script>
+<script src="js/vehicles.js"></script>
+<script src="js/peds.js"></script>
+<script src="js/police.js"></script>
+<script src="js/particles.js"></script>
+<script src="js/combat.js"></script>
+<script src="js/missions.js"></script>
+<script src="js/player.js"></script>
+<script src="js/input.js"></script>
+<script src="js/save.js"></script>
+<script src="js/hud.js"></script>
+<script src="js/scenes.js"></script>
+<script src="js/main.js"></script>
 </body>
 </html>

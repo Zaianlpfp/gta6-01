@@ -1,246 +1,237 @@
-// Missions and side work for Solmar Bay.
-// Five story jobs from Mara Solis, the fixer who runs the bay's night
-// economy, plus taxi fares and 20 hidden sun coins for free-roam money.
-// A mission is a list of steps; each step is a place to reach, a thing to
-// hold, or a timer to survive. The HUD reads currentObjective() and
-// currentMarker() every frame.
-import { dist, makeRng, pick, randRange, randInt } from './util.js';
-import { Car } from './vehicles.js';
+// Solmar Bay — missions.js
+// One job: the story — 8 named jobs from Mara Solis and Dante Voss, each a
+// small state machine of stages (car / goto / pickup / steal / wait / escape),
+// with dialog, timers, payouts, REP and a GPS beacon in the world.
+'use strict';
 
-function lm(city, name) { return city.landmarks[name]; }
+const Missions = {
+  active: null,        // mission def currently running
+  stageIdx: 0, stageT: 0, timerLeft: 0, beacon: null, beaconRing: null,
+  dialogQueue: [], dialogT: 0, done: {}, order: [],
 
-export class Missions {
-  constructor(city) {
-    this.city = city;
-    this.rng = makeRng(20261117);
-    this.index = 0;            // story mission 0..4, 5 = story done
-    this.step = 0;
-    this.stepTimer = 0;
-    this.holdProgress = 0;
-    this.fare = null;          // active taxi fare {ped, dest}
-    this.fareCooldown = 0;
-    this.coins = [];           // {x,y,taken}
-    this.coinsCollected = 0;
-    this.message = null;       // {title, body, until}
-    this.storyDone = false;
-    this.buildCoins();
-    this.startMission(0);
-  }
-  buildCoins() {
-    const rng = makeRng(555);
-    for (let i = 0; i < 20; i++) {
-      const p = this.city.randomRoadPoint(rng);
-      const s = this.city.sidewalkPoint(p.x, p.y);
-      this.coins.push({ x: s.x, y: s.y, taken: false });
+  start(id) {
+    const def = MISSIONS.find(m => m.id === id);
+    if (!def || this.done[id] || (this.active && this.active.id === id)) return false;
+    if (id > 1 && !this.done[id - 1]) return false; // sequential story
+    this.active = def;
+    this.stageIdx = 0;
+    this.stageT = 0;
+    this.heatAdded = false;
+    this.timerLeft = def.timer || 0;
+    if (def.id === 4) { G.heat = 60; AudioSys.setSiren(true); } // "Heat" starts with the whole department on you
+    if (def.night) DayCycle.setTime(22 * 60 + 5); // night run starts after dark
+    this.showDialog(def.contact, def.portrait, def.dialog);
+    this.setBeaconForStage();
+    AudioSys.missionDone();
+    showToast(def.chapter + ' · ' + def.title.toUpperCase() + ' — ' + fmtCash(def.payout));
+    return true;
+  },
+
+  currentStage() {
+    return this.active ? this.active.stages[this.stageIdx] : null;
+  },
+
+  setBeaconForStage() {
+    this.clearBeacon();
+    const st = this.currentStage();
+    if (!st || st.type === 'car' || st.type === 'escape') return;
+    if (st.x === undefined) return;
+    const g = new THREE.Group();
+    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 60, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xffc300, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false }));
+    cyl.position.y = 30; g.add(cyl);
+    const dia = new THREE.Mesh(new THREE.OctahedronGeometry(3.4),
+      new THREE.MeshBasicMaterial({ color: 0xffc300 }));
+    dia.position.y = 24; g.add(dia);
+    g.position.set(st.x, 0, st.z);
+    G.scene.add(g);
+    const ring = new THREE.Mesh(new THREE.RingGeometry((st.r || 16) - 2, st.r || 16, 40),
+      new THREE.MeshBasicMaterial({ color: 0xffc300, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2; ring.position.set(st.x, 0.25, st.z);
+    G.scene.add(ring);
+    this.beacon = g; this.beaconRing = ring;
+  },
+  clearBeacon() {
+    if (this.beacon && this.beacon.parent) this.beacon.parent.remove(this.beacon);
+    if (this.beaconRing && this.beaconRing.parent) this.beaconRing.parent.remove(this.beaconRing);
+    this.beacon = null; this.beaconRing = null;
+  },
+
+  advance() {
+    this.stageIdx++;
+    this.stageT = 0;
+    this.heatAdded = false;
+    AudioSys.pickup();
+    // Mission 7: touching the cargo wakes the whole city — four stars.
+    if (this.active && this.active.id === 7 && this.stageIdx === 2) Police.addHeat(80, 'FOUR STARS — HARBOR LIGHTS');
+    if (this.stageIdx >= this.active.stages.length) this.complete();
+    else this.setBeaconForStage();
+  },
+
+  complete() {
+    const def = this.active;
+    this.done[def.id] = true;
+    G.missionsDone++;
+    G.cash += def.payout;
+    G.rep += def.xp;
+    this.clearBeacon();
+    this.active = null;
+    AudioSys.missionDone();
+    showToast('JOB COMPLETE — ' + def.title.toUpperCase() + '  +' + fmtCash(def.payout) + '  +' + def.xp + ' REP');
+    this.showDialog(def.contact, def.portrait, [this.completeLine(def)]);
+    // Weapon unlocks.
+    for (const w of WEAPONS) if (w.unlockMission === def.id + 1) showToast('UNLOCKED: ' + w.name);
+    if (def.id === 8) showToast('STORY COMPLETE — you run Solmar Bay now');
+    SaveGame.autosave();
+    HUD.refreshAll();
+  },
+  completeLine(def) {
+    const lines = {
+      1: 'Clean run. The fares love you already. Come back when you want real money.',
+      2: 'Delivered, no questions. That is how you stay alive in this town, cariño.',
+      3: 'Dante says the GT is sweet. You drive like you were born in the back seat.',
+      4: 'Ghost. Not a single unit knows where you went. That is the whole job.',
+      5: 'Two drops, no headlights off, no cops. You are my night guy now, kid.',
+      6: 'Two cars, cash in hand. The chop shop eats well tonight because of you.',
+      7: 'Four stars and you still brought my cargo home. The city is yours, cariño.',
+      8: 'Five thousand and the bank will never know what hit it. Solmar Bay is yours now.',
+    };
+    return lines[def.id] || 'Good work.';
+  },
+
+  fail(reason) {
+    if (!this.active) return;
+    showToast('JOB FAILED — ' + reason);
+    this.clearBeacon();
+    this.active = null;
+    HUD.refreshAll();
+  },
+
+  // Mission stage logic, called every frame while a mission runs.
+  update(dt) {
+    // Dialog auto-advance.
+    if (this.dialogT > 0) {
+      this.dialogT -= dt;
+      if (this.dialogT <= 0) HUD.hideDialog();
     }
-  }
-  story() {
-    const L = (n) => lm(this.city, n);
-    return [
-      {
-        id: 'first-fare', title: 'First Fare', giver: 'Mara Solis',
-        brief: 'Jax, you need wheels and a rep. A fare is waiting downtown — pick them up and drop them at the Palms. Drive like you mean it.',
-        steps: [
-          { kind: 'goto', text: 'Pick up the fare downtown', x: L('mall').x, y: L('mall').y, r: 90 },
-          { kind: 'goto', text: 'Drop the fare at the Palms Beach Hotel', x: L('hotel').x, y: L('hotel').y, r: 90 },
-        ],
-        reward: 150,
-      },
-      {
-        id: 'the-package', title: 'The Package', giver: 'Mara Solis',
-        brief: 'A package is sitting at the marina. No questions, no cops. Bring it to the Rusty Anchor garage.',
-        steps: [
-          { kind: 'goto', text: 'Pick up the package at the marina', x: L('marina').x, y: L('marina').y, r: 90 },
-          { kind: 'goto', text: 'Deliver the package to the Rusty Anchor', x: L('chopshop').x, y: L('chopshop').y, r: 90 },
-        ],
-        reward: 300,
-      },
-      {
-        id: 'hot-wheels', title: 'Hot Wheels', giver: 'Mara Solis',
-        brief: 'A red Comet GT is parked at the marina, keys in the sun visor. Take it. Bring it to the Rusty Anchor — and try not to scratch it.',
-        steps: [
-          { kind: 'steal', text: 'Steal the red Comet GT at the marina', x: L('marina').x, y: L('marina').y, r: 120 },
-          { kind: 'deliver-car', text: 'Deliver the Comet GT to the Rusty Anchor', x: L('chopshop').x, y: L('chopshop').y, r: 90 },
-        ],
-        reward: 450,
-      },
-      {
-        id: 'heat', title: 'Heat', giver: 'Mara Solis',
-        brief: 'The PD is all over you, Jax. Lose them. Stay out of sight until the heat dies — then get home to your place.',
-        steps: [
-          { kind: 'survive', text: 'Survive the heat — stay alive 60 seconds', seconds: 60 },
-          { kind: 'goto', text: 'Lay low at your place', x: L('safehouse').x, y: L('safehouse').y, r: 90 },
-        ],
-        reward: 600,
-      },
-      {
-        id: 'big-score', title: 'The Big Score', giver: 'Mara Solis',
-        brief: 'Tonight we hit the Solmar National Bank. Walk in, grab the cash, and run. Every cop in the city will be on you — make it home.',
-        steps: [
-          { kind: 'goto', text: 'Get to the Solmar National Bank', x: L('bank').x, y: L('bank').y, r: 90 },
-          { kind: 'hold', text: 'Hold E to crack the vault', x: L('bank').x, y: L('bank').y, r: 80, seconds: 3 },
-          { kind: 'goto', text: 'Escape to your place — lose the heat', x: L('safehouse').x, y: L('safehouse').y, r: 90 },
-        ],
-        reward: 1500,
-      },
-    ];
-  }
-  current() { return this.index < 5 ? this.story()[this.index] : null; }
-  currentStep() { const m = this.current(); return m ? m.steps[this.step] : null; }
-  currentObjective() {
-    const s = this.currentStep();
-    if (this.fare) return 'Fare: drop the passenger at the marker';
-    if (!s) return this.storyDone ? 'Story complete — free roam Solmar Bay' : '';
-    return s.text;
-  }
-  currentMarker() {
-    const s = this.currentStep();
-    if (this.fare) return { x: this.fare.dest.x, y: this.fare.dest.y, color: '#f2c14e' };
-    if (!s || s.kind === 'survive') return null;
-    return { x: s.x, y: s.y, color: '#ff5d5d' };
-  }
-  startMission(i) {
-    this.index = i;
-    this.step = 0;
-    this.stepTimer = 0;
-    this.holdProgress = 0;
-    const m = this.current();
-    if (m) this.showMessage(m.title + ' — ' + m.giver, m.brief, 7);
-  }
-  showMessage(title, body, seconds) {
-    this.message = { title, body, until: seconds };
-  }
-  // Called every frame by the game. Returns events for the game to act on.
-  update(dt, game) {
-    const p = game.player, pol = game.police;
-    if (this.message) { this.message.until -= dt; if (this.message.until <= 0) this.message = null; }
-    this.fareCooldown = Math.max(0, this.fareCooldown - dt);
-    // Sun coins.
-    for (const c of this.coins) {
-      if (!c.taken && dist(p.x, p.y, c.x, c.y) < 34) {
-        c.taken = true;
-        this.coinsCollected++;
-        p.cash += 50;
-        game.sound.coin();
-        game.toast('Sun coin! +$50  (' + this.coinsCollected + '/20)');
+    if (!this.active) return;
+    const st = this.currentStage();
+    if (!st) return;
+    // Mission timer.
+    if (this.active.timer) {
+      this.timerLeft -= dt;
+      if (this.timerLeft <= 0) { this.fail('Out of time'); return; }
+    }
+    const px = G.player.x, pz = G.player.z;
+    switch (st.type) {
+      case 'car':
+        if (Vehicles.playerCar) this.advance();
+        break;
+      case 'goto':
+        if (dist2d(px, pz, st.x, st.z) < st.r) this.advance();
+        break;
+      case 'pickup':
+        if (dist2d(px, pz, st.x, st.z) < st.r && G.keys.e) { G.keys.e = false; this.advance(); }
+        break;
+      case 'steal': {
+        const car = this.stealTargetFor(st);
+        if (car && Vehicles.playerCar === car) { Police.addHeat(15, 'GRAND THEFT AUTO'); this.advance(); }
+        else if (dist2d(px, pz, st.x, st.z) < st.r) HUD.showPrompt('Press E to steal the car');
+        break;
       }
-    }
-    // Taxi fares are picked up by the main loop on E (see main.js);
-    // this update only completes an active fare.
-    if (this.fare) {
-      const d = this.fare.dest;
-      if (dist(p.x, p.y, d.x, d.y) < 70) {
-        const pay = randInt(this.rng, 40, 85);
-        p.cash += pay;
-        this.fare.ped.inCar = null;
-        this.fare.ped.x = p.x + 40; this.fare.ped.y = p.y + 30;
-        this.fare = null;
-        this.fareCooldown = 8;
-        game.sound.missionDone();
-        game.toast('Fare complete! +$' + pay);
-      } else if (!p.driving) {
-        // Passenger walks off if you ditch the car.
-        this.fare.ped.inCar = null;
-        this.fare.ped.x = p.x + 40; this.fare.ped.y = p.y + 30;
-        this.fare = null;
-        this.fareCooldown = 8;
+      case 'wait': {
+        if (dist2d(px, pz, st.x, st.z) < st.r) {
+          if (!this.heatAdded) { this.heatAdded = true; Police.addHeat(40, 'BANK ALARM TRIPPED'); }
+          this.stageT += dt;
+          if (this.stageT >= st.t) this.advance();
+        } else this.stageT = Math.max(0, this.stageT - dt);
+        break;
       }
-    }
-    const m = this.current();
-    if (!m) return;
-    const s = m.steps[this.step];
-    if (!s) return;
-    // Mission 4 sets the heat when it starts.
-    if (m.id === 'heat' && this.step === 0 && this.stepTimer === 0) {
-      this.stepTimer = 0.0001;
-      pol.addHeat(55, 'heat');
-      game.sound.phoneBuzz();
-    }
-    // Mission 5 raises the heat after the vault.
-    if (m.id === 'big-score' && this.step === 2 && this.stepTimer === 0) {
-      this.stepTimer = 0.0001;
-      pol.addHeat(70, 'big-score');
-    }
-    if (s.kind === 'goto' || s.kind === 'steal' || s.kind === 'deliver-car') {
-      const d = dist(p.x, p.y, s.x, s.y);
-      if (s.kind === 'steal') {
-        if (p.driving && p.inCar.kind === 'sport' && p.inCar.special === 'comet') this.advance(game);
-      } else if (s.kind === 'deliver-car') {
-        if (p.driving && p.inCar.special === 'comet' && d < s.r) {
-          p.exitCar();
-          this.advance(game);
+      case 'escape': {
+        const safe = landmark('safehouse');
+        const atSafe = dist2d(px, pz, safe.x, safe.z) < 30;
+        if (atSafe && G.heat < 40) { this.advance(); break; }
+        if (this.active.id === 4) {
+          // "Heat": survive until the heat cools off.
+          if (G.heat <= 0) this.advance();
+        } else if (this.stageT === 0 && st.t) {
+          this.stageT = 1; // mark started
         }
-      } else if (d < s.r) {
-        this.advance(game);
-      }
-    } else if (s.kind === 'hold') {
-      if (dist(p.x, p.y, s.x, s.y) < s.r && !p.driving && game.input.down('KeyE')) {
-        this.holdProgress += dt;
-        if (this.holdProgress >= s.seconds) { this.holdProgress = 0; this.advance(game); }
-      } else {
-        this.holdProgress = Math.max(0, this.holdProgress - dt * 2);
-      }
-    } else if (s.kind === 'survive') {
-      this.stepTimer += dt;
-      if (this.stepTimer >= s.seconds) this.advance(game);
-    }
-  }
-  advance(game) {
-    const m = this.current();
-    game.sound.pickup();
-    this.step++;
-    if (this.step >= m.steps.length) {
-      game.player.cash += m.reward;
-      game.sound.missionDone();
-      game.toast('Mission complete: ' + m.title + '  +$' + m.reward);
-      game.saveGame();
-      this.index++;
-      if (this.index >= 5) {
-        this.storyDone = true;
-        this.showMessage('SOLMAR BAY — STORY COMPLETE', 'You did it, Jax. The bay is yours now. Keep driving, keep earning — the city never sleeps.', 9);
-      } else {
-        this.startMission(this.index);
+        if (st.t && this.stageT > 0) {
+          this.stageT += dt;
+          if (this.stageT > st.t && G.heat <= 0) this.advance();
+        }
+        break;
       }
     }
-  }
-  // The red Comet GT for mission 3, parked at the marina.
-  spawnComet(allCars) {
-    const L = lm(this.city, 'marina');
-    const car = new Car(L.x + 60, L.y + 40, Math.PI / 2, 'sport', '#d21f3c');
-    car.special = 'comet';
-    allCars.push(car);
-    return car;
-  }
-  draw(ctx, cam, time) {
-    // Sun coins.
-    for (const c of this.coins) {
-      if (c.taken) continue;
-      if (c.x < cam.x - cam.w / 2 - 30 || c.x > cam.x + cam.w / 2 + 30 || c.y < cam.y - cam.h / 2 - 30 || c.y > cam.y + cam.h / 2 + 30) continue;
-      const bob = Math.sin(time * 3 + c.x) * 3;
-      ctx.save();
-      ctx.translate(c.x, c.y + bob);
-      ctx.fillStyle = '#f2c14e';
-      ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#fff3c9';
-      ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#c98a1e';
-      ctx.font = 'bold 11px Arial'; ctx.textAlign = 'center';
-      ctx.fillText('$', 0, 4);
-      ctx.restore();
+    // Beacon spin + bob.
+    if (this.beacon) {
+      this.beacon.rotation.y += dt * 1.5;
+      this.beacon.children[1].position.y = 24 + Math.sin(G.time * 2.4) * 1.6;
     }
-    // Objective marker: a pulsing beacon + a floating arrow at the screen edge.
-    const mk = this.currentMarker();
-    if (mk) {
-      const pulse = 1 + Math.sin(time * 4) * 0.15;
-      ctx.save();
-      ctx.translate(mk.x, mk.y);
-      ctx.strokeStyle = mk.color;
-      ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(0, 0, 26 * pulse, 0, Math.PI * 2); ctx.stroke();
-      ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI * 2); ctx.fillStyle = mk.color; ctx.fill();
-      ctx.fillStyle = mk.color;
-      ctx.beginPath(); ctx.moveTo(0, -34); ctx.lineTo(-9, -18); ctx.lineTo(9, -18); ctx.closePath(); ctx.fill();
-      ctx.restore();
+  },
+
+  stealTargetFor(st) {
+    if (this.active.id === 3) return Vehicles.stealSolstice;
+    if (this.active.id === 6) return this.stageIdx === 0 ? Vehicles.stealMarlin : Vehicles.stealRunner;
+    return null;
+  },
+
+  showDialog(name, portrait, lines) {
+    this.dialogQueue = lines.slice();
+    this.dialogT = 0;
+    this.nextDialogLine(name, portrait);
+  },
+  nextDialogLine(name, portrait) {
+    if (!this.dialogQueue.length) { HUD.hideDialog(); return; }
+    const line = this.dialogQueue.shift();
+    HUD.showDialog(name, portrait, line);
+    this.dialogT = 5.5;
+  },
+
+  // GPS: distance + direction to the current objective.
+  gps() {
+    if (!this.active) return null;
+    const st = this.currentStage();
+    if (!st) return null;
+    if (st.type === 'escape') {
+      const safe = landmark('safehouse');
+      return { x: safe.x, z: safe.z, label: 'SAFEHOUSE' };
     }
-  }
-}
+    if (st.x === undefined) return null;
+    return { x: st.x, z: st.z, label: st.text };
+  },
+
+  // Taxi side work: pick up a fare, drop them off, get paid.
+  taxi: { fare: null, drop: null, active: false },
+  startTaxiFare() {
+    if (this.taxi.active || this.active) return;
+    const spots = [
+      { x: -1330, z: -520 }, { x: -1380, z: 620 }, { x: 900, z: -620 },
+      { x: 1000, z: 180 }, { x: 260, z: 480 }, { x: -700, z: 1020 },
+    ];
+    const pick = spots[Math.floor(Math.random() * spots.length)];
+    const drop = spots[Math.floor(Math.random() * spots.length)];
+    this.taxi = { fare: pick, drop, active: true, picked: false };
+    Peds.spawnFare(G.scene, pick.x, pick.z);
+    showToast('TAXI FARE — pick up the passenger at ' + districtAt(pick.x, pick.z));
+  },
+  updateTaxi(dt) {
+    if (!this.taxi.active) return;
+    const t = this.taxi;
+    if (!t.picked) {
+      if (dist2d(G.player.x, G.player.z, t.fare.x, t.fare.z) < 12 && Vehicles.playerCar) {
+        t.picked = true;
+        Peds.clearFare();
+        showToast('Passenger aboard — take them to ' + districtAt(t.drop.x, t.drop.z));
+        AudioSys.pickup();
+      }
+    } else if (dist2d(G.player.x, G.player.z, t.drop.x, t.drop.z) < 16) {
+      G.cash += FARE_PAY; G.rep += 25;
+      showToast('FARE COMPLETE  +' + fmtCash(FARE_PAY) + '  +25 REP');
+      AudioSys.coin();
+      this.taxi.active = false;
+      HUD.refreshAll();
+    }
+  },
+};

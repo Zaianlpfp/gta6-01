@@ -1,31 +1,49 @@
-// Solmar Bay — the entry program for make.fun's gta6-01 bounty.
-// It copies game/ and screenshots/ from this repository into the output
-// directory and writes /output/dossier.json with buildDossier from the
-// kit's vendor/makefun-game.ts (unchanged). Outside the grader,
-// MAKEFUN_OUTPUT_DIR stands in for /output. Node 22 standard library only.
-// (Continuation, r2: the driving-position sync in game/js/main.js was
-// verified in headless Chrome and the four screenshots below were
-// re-taken from the fixed game; this program itself is unchanged.)
-import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+// Solmar Bay — main.ts (Node 22, standard library only)
+// The entry program for gta6-01: it hands the game in. It copies this
+// repository's game/ and screenshots/ into the output directory and writes
+// /output/dossier.json with the vendored make.fun library, exactly as the
+// kit's starter does. No network, no build step, no surprises.
+//
+// Run it locally with:
+//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-// main.ts sits at the repository root, so its own directory IS the repo
-// root. (An earlier draft went one level too high with a double dirname
-// and failed with ENOENT on game/ — fixed in the r2 continuation, 18 Nov.)
-const repoRoot = dirname(fileURLToPath(import.meta.url));
-const outDir = process.env.MAKEFUN_OUTPUT_DIR || '/output';
+const here = fileURLToPath(new URL('.', import.meta.url));
+const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-mkdirSync(outDir, { recursive: true });
-cpSync(join(repoRoot, 'game'), join(outDir, 'game'), { recursive: true });
-cpSync(join(repoRoot, 'screenshots'), join(outDir, 'screenshots'), { recursive: true });
+// Fresh output directory, then the game and its screenshots, verbatim.
+mkdirSync(out, { recursive: true });
+cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
+mkdirSync(join(out, 'screenshots'), { recursive: true });
+if (existsSync(join(here, 'screenshots'))) {
+  cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+}
 
-const dossier = buildDossier(outDir, {
-  text_max_bytes: 163840,
-  screenshots: { max: 4, max_bytes: 262144 },
-  game_max_files: 993,
-  game_max_bytes: 50331648,
-});
-writeFileSync(join(outDir, 'dossier.json'), dossier);
-console.log('Solmar Bay handed in: game/ + screenshots/ + dossier.json in ' + outDir);
+// The sealed gate's own caps (reference/gate.json): text_max_bytes shapes the
+// dossier text; the rest refuse an entry the scorer would refuse — more than
+// 4 screenshots or one over 256 KiB, more than 993 files in game/ or 48 MiB
+// of game files in all, or a path under game/ over 1000 bytes.
+writeFileSync(
+  join(out, 'dossier.json'),
+  buildDossier(out, {
+    text_max_bytes: 163840,
+    screenshots: { max: 4, max_bytes: 262144 },
+    game_max_files: 993,
+    game_max_bytes: 50331648,
+    game_path_max_bytes: 1000,
+  }),
+);
+
+// Read the dossier back and say what shipped, so a broken build is loud:
+// zero screenshots means the judge would see no game at all.
+const dossier = JSON.parse(readFileSync(join(out, 'dossier.json'), 'utf8'));
+const shots = dossier.images?.length ?? 0;
+console.log(
+  `Solmar Bay handed in: ${shots} screenshot(s), ` +
+    `${dossier.text ? dossier.text.length : 0} dossier text bytes -> ${join(out, 'dossier.json')}`,
+);
+if (shots === 0) throw new Error('no screenshots in dossier — refusing to hand in a blind entry');

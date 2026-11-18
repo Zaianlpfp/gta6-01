@@ -1,127 +1,123 @@
-// Pedestrians: they walk the sidewalks, wait at corners, flee gunfire, and
-// one of them is always looking for a taxi. Each ped is a coloured dot with
-// a head, drawn top-down, with a little walk bob.
-import { makeRng, pick, randRange, randInt, dist, angleTo, turnToward, clamp } from './util.js';
+// Solmar Bay — peds.js
+// One job: pedestrians — low-poly people who walk the sidewalks, cross at
+// corners, wait as taxi fares, and scatter when a car comes at them.
+'use strict';
 
-const SHIRTS = ['#e85d5d', '#4d9de0', '#f2c14e', '#7bc96f', '#c96fb0', '#e8e8e8', '#e07b39', '#6f9dc9'];
-const SKINS = ['#f2c9a0', '#d9a06c', '#a06a3b', '#8a5a2e', '#e8b48a'];
+const Peds = {
+  list: [], fare: null,
 
-export class Ped {
-  constructor(x, y, rng) {
-    this.x = x; this.y = y;
-    this.angle = rng() * Math.PI * 2;
-    this.speed = randRange(rng, 45, 80);
-    this.shirt = pick(rng, SHIRTS);
-    this.skin = pick(rng, SKINS);
-    this.pants = pick(rng, ['#2e3a4d', '#4d3a2e', '#3a4d2e', '#5a2e3a']);
-    this.target = null;
-    this.wait = randRange(rng, 0, 3);
-    this.fleeing = 0;
-    this.dead = false;
-    this.taxi = false;      // wants a cab
-    this.taxiTimer = 0;
-    this.walkPhase = rng() * 10;
-    this.inCar = null;      // the Car this ped drives, if any
-  }
-  update(dt, city, danger) {
-    if (this.dead || this.inCar) return;
-    this.walkPhase += dt * 8;
-    if (danger) {
-      // Flee from gunfire or a speeding car.
-      this.fleeing = 1.5;
-      this.target = { x: this.x + (this.x - danger.x) * 2, y: this.y + (this.y - danger.y) * 2 };
-    }
-    if (this.fleeing > 0) {
-      this.fleeing -= dt;
-      const a = angleTo(this.x, this.y, this.target.x, this.target.y);
-      this.angle = turnToward(this.angle, a, 6 * dt);
-      const sp = 190;
-      const nx = this.x + Math.cos(this.angle) * sp * dt;
-      const ny = this.y + Math.sin(this.angle) * sp * dt;
-      if (!city.collidesBuilding(nx, ny, 10) && !city.inWater(nx, ny)) { this.x = nx; this.y = ny; }
-      return;
-    }
-    if (this.wait > 0) { this.wait -= dt; return; }
-    if (!this.target) {
-      const sp = city.sidewalkPoint(this.x + (Math.random() - 0.5) * 300, this.y + (Math.random() - 0.5) * 300);
-      this.target = sp;
-    }
-    const d = dist(this.x, this.y, this.target.x, this.target.y);
-    if (d < 12) { this.target = null; this.wait = randRange(Math.random, 0.5, 4); return; }
-    const a = angleTo(this.x, this.y, this.target.x, this.target.y);
-    this.angle = turnToward(this.angle, a, 4 * dt);
-    const nx = this.x + Math.cos(this.angle) * this.speed * dt;
-    const ny = this.y + Math.sin(this.angle) * this.speed * dt;
-    if (!city.collidesBuilding(nx, ny, 10) && !city.inWater(nx, ny)) { this.x = nx; this.y = ny; }
-    else { this.target = null; }
-  }
-  draw(ctx) {
-    if (this.dead || this.inCar) return;
-    const bob = Math.sin(this.walkPhase) * 1.5;
-    ctx.save();
-    ctx.translate(this.x, this.y);
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.beginPath(); ctx.ellipse(2, 3, 9, 7, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.rotate(this.angle);
-    // Legs (two dots that swing while walking).
-    ctx.fillStyle = this.pants;
-    ctx.beginPath(); ctx.arc(-4 + bob, -4, 3.4, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(-4 - bob, 4, 3.4, 0, Math.PI * 2); ctx.fill();
-    // Body + head.
-    ctx.fillStyle = this.shirt;
-    ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = this.skin;
-    ctx.beginPath(); ctx.arc(4, 0, 4.6, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
-    if (this.taxi) {
-      ctx.fillStyle = '#f2c14e';
-      ctx.font = 'bold 13px Arial'; ctx.textAlign = 'center';
-      ctx.fillText('$', this.x, this.y - 16);
-    }
-  }
-}
+  makePed(scene, x, z) {
+    const g = new THREE.Group();
+    const shirt = new THREE.MeshLambertMaterial({ color: pick([0xff6b6b, 0x4ecdc4, 0xffe66d, 0x95e1d3, 0xf38181, 0xa8e6cf], Math.random) });
+    const skin = new THREE.MeshLambertMaterial({ color: pick([0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0xffdbac], Math.random) });
+    const legs = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 0.5), new THREE.MeshLambertMaterial({ color: 0x2f3542 }));
+    legs.position.y = 0.55; g.add(legs);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.3, 0.6), shirt);
+    body.position.y = 1.75; body.castShadow = true; g.add(body);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), skin);
+    head.position.y = 2.75; head.castShadow = true; g.add(head);
+    const hair = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.3, 0.75),
+      new THREE.MeshLambertMaterial({ color: pick([0x1a1a1a, 0x6b4226, 0xd4a017, 0x8d99ae], Math.random) }));
+    hair.position.y = 3.15; g.add(hair);
+    g.position.set(x, 0, z);
+    scene.add(g);
+    const p = {
+      mesh: g, x, z, heading: Math.random() * Math.PI * 2,
+      speed: 1.6 + Math.random() * 1.4, walkPhase: Math.random() * 6,
+      fare: false, scared: 0, waitT: 0,
+    };
+    this.list.push(p);
+    return p;
+  },
 
-export class PedCrowd {
-  constructor(city) {
-    this.city = city;
-    this.peds = [];
-    this.rng = makeRng(777);
-    for (let i = 0; i < 42; i++) this.spawnFar(0, 0, 0);
-  }
-  spawnFar(px, py, minDist) {
-    const rng = this.rng;
-    for (let tries = 0; tries < 10; tries++) {
-      const p = this.city.randomRoadPoint(rng);
-      const s = this.city.sidewalkPoint(p.x, p.y);
-      if (dist(s.x, s.y, px, py) < minDist) continue;
-      const ped = new Ped(s.x, s.y, rng);
-      if (rng() < 0.08) { ped.taxi = true; ped.taxiTimer = 60; }
-      this.peds.push(ped);
-      return ped;
+  spawnAll(scene) {
+    const rnd = mulberry32(777);
+    for (let i = 0; i < TUNE.pedCount; i++) {
+      const a = pick(AVENUES, rnd), s = pick(STREETS, rnd);
+      const onAve = rnd() < 0.5;
+      const x = onAve ? a + (rnd() < 0.5 ? -26 : 26) : -1500 + rnd() * 3000;
+      const z = onAve ? -1100 + rnd() * 2200 : s + (rnd() < 0.5 ? -26 : 26);
+      if (City.insideCollider(x, z)) continue;
+      this.makePed(scene, x, z);
     }
-    return null;
-  }
-  update(dt, playerPos, danger) {
-    const rng = this.rng;
-    if (this.peds.filter((p) => !p.dead && !p.inCar).length < 46 && rng() < dt * 0.8) {
-      this.spawnFar(playerPos.x, playerPos.y, 650);
+  },
+
+  spawnFare(scene, x, z) {
+    if (this.fare) return this.fare;
+    const p = this.makePed(scene, x, z);
+    p.fare = true; p.speed = 0;
+    // A floating "$" marker so the fare reads at a glance.
+    const tex = makeCanvas(128, 128, (g, w, h) => {
+      g.clearRect(0, 0, w, h);
+      g.font = 'bold 96px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.shadowColor = '#ffd700'; g.shadowBlur = 18; g.fillStyle = '#ffd700';
+      g.fillText('$', w / 2, h / 2);
+    });
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(8, 8),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide }));
+    m.position.set(x, 7, z);
+    scene.add(m);
+    p.fareMarker = m;
+    this.fare = p;
+    return p;
+  },
+
+  clearFare() {
+    if (!this.fare) return;
+    if (this.fare.fareMarker && this.fare.fareMarker.parent) this.fare.fareMarker.parent.remove(this.fare.fareMarker);
+    this.fare.fare = false; this.fare.speed = 2;
+    this.fare = null;
+  },
+
+  update(dt, playerX, playerZ, playerCar) {
+    for (const p of this.list) {
+      if (p.fare) { p.walkPhase += dt * 2; continue; }
+      // Scatter if a car (player or traffic) is bearing down.
+      let threat = null;
+      if (playerCar) {
+        const d = dist2d(p.x, p.z, playerCar.x, playerCar.z);
+        if (d < 14 && Math.abs(playerCar.speed) > 6) threat = playerCar;
+      }
+      if (threat) {
+        p.scared = 1.2;
+        const away = Math.atan2(p.x - threat.x, p.z - threat.z);
+        p.heading = angleLerp(p.heading, away, dt * 6);
+        p.speed = 5.5;
+      } else if (p.scared > 0) {
+        p.scared -= dt;
+        p.speed = 4;
+      } else {
+        p.speed = lerp(p.speed, 1.6 + (p.baseSpeed || 1.6), dt);
+      }
+      if (!p.baseSpeed) p.baseSpeed = p.speed;
+      // Stroll along the sidewalk; at a corner, pick a new direction.
+      p.walkPhase += dt * p.speed * 2.2;
+      const nx = p.x + Math.sin(p.heading) * p.speed * dt;
+      const nz = p.z + Math.cos(p.heading) * p.speed * dt;
+      const nearX = AVENUES.some(a => Math.abs(nx - a) < 30);
+      const nearZ = STREETS.some(s => Math.abs(nz - s) < 30);
+      if ((nearX && nearZ && Math.random() < dt * 0.5) || Math.random() < dt * 0.02) {
+        p.heading = Math.round((p.heading + pick([-Math.PI / 2, Math.PI / 2], Math.random)) / (Math.PI / 2)) * (Math.PI / 2);
+      }
+      const hit = City.collideCircle(nx, nz, 1);
+      p.x = hit.x; p.z = hit.z;
+      p.mesh.position.set(p.x, 0, p.z);
+      p.mesh.rotation.y = p.heading;
+      // Simple walk swing.
+      const swing = Math.sin(p.walkPhase) * 0.35;
+      p.mesh.rotation.x = swing * 0.12;
+      p.mesh.position.y = Math.abs(Math.sin(p.walkPhase)) * 0.12;
     }
-    for (let i = this.peds.length - 1; i >= 0; i--) {
-      const p = this.peds[i];
-      if (p.dead) { p.deadTimer = (p.deadTimer || 0) + dt; if (p.deadTimer > 25) this.peds.splice(i, 1); continue; }
-      if (dist(p.x, p.y, playerPos.x, playerPos.y) > 1600) { this.peds.splice(i, 1); continue; }
-      if (p.taxi) { p.taxiTimer -= dt; if (p.taxiTimer <= 0) { p.taxi = false; } }
-      p.update(dt, this.city, danger);
+    // Fare marker bobs.
+    if (this.fare && this.fare.fareMarker) {
+      this.fare.fareMarker.position.y = 7 + Math.sin(performance.now() / 300) * 0.8;
+      this.fare.fareMarker.rotation.y += dt * 1.5;
     }
-  }
-  nearestTaxiPed(x, y, maxD) {
-    let best = null, bd = maxD;
-    for (const p of this.peds) {
-      if (!p.taxi || p.dead || p.inCar) continue;
-      const d = dist(x, y, p.x, p.y);
-      if (d < bd) { bd = d; best = p; }
-    }
-    return best;
-  }
-  draw(ctx) { for (const p of this.peds) p.draw(ctx); }
-}
+  },
+
+  countNear(x, z, r) {
+    let n = 0;
+    for (const p of this.list) if (dist2d(p.x, p.z, x, z) < r) n++;
+    return n;
+  },
+};
