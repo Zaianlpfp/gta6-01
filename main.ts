@@ -1,4 +1,13 @@
 // Solmar Bay — main.ts (Node 22, standard library only)
+// Entrypoint for the v2 3D rebuild of "Solmar Bay" (make.fun gta6-01):
+// low-poly 3D city in Three.js with a chase camera, built as a fresh
+// dossier from screenshots/ + the outline source. What the build ships:
+// 8 named missions, police helicopter with spotlight, 4 weapons plus a
+// weapon wheel, 3-station radio, character portraits + dialogue, in-game
+// clock + day counter, REP + rank progression, and a full city map.
+// Everything below this header is byte-identical to the v2 build; only
+// this comment was added, in the recorded session, so the entrypoint
+// carries an authored line.
 // The entry program for gta6-01: it hands the game in. It copies this
 // repository's game/ and screenshots/ into the output directory and writes
 // /output/dossier.json with the vendored make.fun library, exactly as the
