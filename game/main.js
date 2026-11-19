@@ -1,41 +1,75 @@
+// Solmar Bay — boot + wiring (finisher). Loads last: defines the event bus
+// and query parser the modules expect, boots the engine, then owns the one
+// frame loop. Game keys already belong to the player/police/hud/map modules
+// (Digit1-5, R/Q/M/F/P/Esc) and are NOT rebound here.
 (function () {
-  'use strict';
-  var SB = window.SB;
-  var q = SB.parseQuery();
-  var seed = parseInt(q.get('seed') || '1337', 10) || 1337;
-  SB.init({ canvas: 'game', seed: seed });
-  SB.city.buildCity(seed);
-  SB.vehicles.spawnParked();
-  SB.player.create();
-  if (SB.audio) SB.audio.init();
+  var SB = window.SB || (window.SB = {});
+  var doc = window.document;
+
+  // --- tiny event bus: SB.on(ev, fn) / SB.off(ev, fn) / SB.emit(ev, data) ---
+  var bus = {};
+  SB.on = function (ev, fn) { (bus[ev] = bus[ev] || []).push(fn); return fn; };
+  SB.off = function (ev, fn) {
+    var a = bus[ev];
+    if (!a) return;
+    var i = a.indexOf(fn);
+    if (i >= 0) a.splice(i, 1);
+  };
+  SB.emit = function (ev, data) {
+    var a = bus[ev] || [];
+    for (var i = 0; i < a.length; i++) { try { a[i](data); } catch (e) {} }
+  };
+
+  // --- query parser: SB.parseQuery('?preset=cover') -> { preset: 'cover' } ---
+  SB.parseQuery = function (src) {
+    var out = {};
+    var s = typeof src === 'string' ? src : window.location.search;
+    if (s.charAt(0) === '?') s = s.slice(1);
+    var parts = s ? s.split('&') : [];
+    for (var i = 0; i < parts.length; i++) {
+      var kv = parts[i].split('=');
+      if (!kv[0]) continue;
+      out[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1] || '');
+    }
+    return out;
+  };
+
+  function unlockAudio() {
+    try { if (SB.audio && SB.audio.unlock) SB.audio.unlock(); } catch (e) {}
+  }
+
+  // --- boot: HUD first (its minimap is built lazily once the game canvas
+  // exists), then the engine from the URL query (?preset=&adv=&speed=&pause=).
+  // bootFromQuery may start the engine's own rAF loop; stop it so this file
+  // owns the one true frame loop below (no double stepping).
   SB.hud.init();
-  SB.bootFromQuery();
-  var presetSpots = { cover: [0, 40, 0], mission: [0, 40, -0.35], night: [0, -380, Math.PI] };
-  var spot = presetSpots[SB.state.scenePreset];
-  if (spot && SB.world.player && !SB.world.player.onFoot) {
-    SB.player.setPosition(spot[0], spot[1], spot[2]);
+  SB.engine.bootFromQuery();
+  try { if (SB.engine.stop) SB.engine.stop(); } catch (e) {}
+
+  // --- input routing: click unlocks audio; Space/arrows must not scroll. ---
+  var game = doc.getElementById('game');
+  if (game) game.addEventListener('click', unlockAudio, false);
+  doc.addEventListener('keydown', function (ev) {
+    unlockAudio();
+    if (ev.code === 'Space' || ev.code === 'ArrowUp' || ev.code === 'ArrowDown' ||
+        ev.code === 'ArrowLeft' || ev.code === 'ArrowRight') ev.preventDefault();
+  }, false);
+  window.addEventListener('resize', function () {
+    try { SB.engine.render(); } catch (e) {}
+  }, false);
+
+  // --- the one frame loop: step + mission tick (live only), HUD every frame.
+  // engine.step() still renders while paused, so the scene stays visible
+  // behind dialogs and the map; the HUD is rewritten from live state each
+  // frame so speed / wanted / clock never freeze.
+  var DT = 1 / 60;
+  function frame() {
+    var paused = !!(SB.state && SB.state.paused);
+    try { SB.engine.step(DT); } catch (e) {}
+    if (!paused) { try { SB.missions.update(DT); } catch (e) {} }
+    try { SB.hud.update(); } catch (e) {}
+    try { SB.hud.render(); } catch (e) {}
+    window.requestAnimationFrame(frame);
   }
-  if (SB.state.scenePreset) SB.updateChaseCam(5);
-  SB.on('shot', function (e) {
-    if (!SB.missions || !SB.missions.standoffHit || !e) return;
-    if (SB.missions.standoffLeft() <= 0) return;
-    SB.missions.standoffHit(e.from, e.dir, e.weapon === 'fists' ? 3 : 80);
-  });
-  if (SB.state.scenePreset === 'cover') {
-    SB.state.speedKmh = 151;
-    SB.state.gear = 'G4';
-    SB.registerUpdate(function () {
-      if (SB.state.scenePreset !== 'cover') return;
-      if (SB.input.axis().y !== 0) return;
-      SB.state.speedKmh = 151;
-      SB.state.gear = 'G4';
-    });
-  }
-  window.addEventListener('keydown', function (e) {
-    if (!SB.state.started || (e.code !== 'KeyP' && e.code !== 'Escape')) return;
-    if (SB.map && SB.map.isOpen()) { SB.map.hide(); return; }
-    if (SB.dialog && SB.dialog.active()) return;
-    SB.setPaused(!SB.state.paused);
-  });
-  SB.start();
+  window.requestAnimationFrame(frame);
 })();

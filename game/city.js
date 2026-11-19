@@ -1,896 +1,664 @@
+// Solmar Bay — city.js (B1, v4-rebuild r4)
+// Kota Solmar Bay: 66 bangunan, 9 distrik, jalan, traffic, pejalan kaki, neon,
+// heli + spotlight cone, palm, pantai/laut, matahari, bank. Semua acak dari rng seed.
+// Pool burst PERSISTEN (perbaikan muzzle flash): 96 box + flash sprite + point
+// light dibuat sekali di attach() dan tinggal di scene sejak awal; burst() hanya
+// toggle visible/posisi — engine me-render seluruh live scene tiap frame.
 (function () {
-  'use strict';
-
   var SB = window.SB = window.SB || {};
+  var T = window.THREE;
   var city = SB.city = SB.city || {};
-
-  var WORLD = { minX: -560, maxX: 470, minZ: -470, maxZ: 530 };
-
-  var DISTRICTS = [
-    { id: 'downtown', name: 'Downtown', x0: -150, z0: -150, x1: 150, z1: 150, tint: 0x8a9ab0 },
-    { id: 'coral-strand', name: 'Coral Strand', x0: -560, z0: -450, x1: -450, z1: 450, tint: 0xe8d5a8 },
-    { id: 'marina', name: 'Pelican Marina', x0: -450, z0: 350, x1: -50, z1: 520, tint: 0x2a7fa8 },
-    { id: 'mercado', name: 'Old Mercado', x0: 150, z0: -150, x1: 450, z1: 150, tint: 0xd08050 },
-    { id: 'neon-mile', name: 'Neon Mile', x0: -350, z0: -450, x1: 350, z1: -340, tint: 0xff2a7a },
-    { id: 'palmetto', name: 'Palmetto Heights', x0: 150, z0: -450, x1: 450, z1: -150, tint: 0x7aa85a },
-    { id: 'deco-row', name: 'Deco Row', x0: -450, z0: -350, x1: -150, z1: -150, tint: 0xd8a0b8 },
-    { id: 'bayline', name: 'Bayline Docks', x0: -50, z0: 350, x1: 450, z1: 520, tint: 0x7a7a7a },
-    { id: 'keystone', name: 'Keystone Field', x0: -150, z0: 150, x1: 150, z1: 350, tint: 0x5a8a4a }
+  var ROADS = [-144, -96, -48, 0, 48, 96, 144];
+  var BLOCKS = [-120, -72, -24, 24, 72, 120];
+  var DIST = [
+    { name: 'Pelican Marina', cx: -96, cz: -96, color: 0x4fa8c9 },
+    { name: 'Palmetto Heights', cx: 0, cz: -96, color: 0x7ad06a },
+    { name: 'Bayline Docks', cx: 96, cz: -96, color: 0x8a8a84 },
+    { name: 'Coral Strand', cx: -96, cz: 0, color: 0xe88a5f },
+    { name: 'Downtown', cx: 0, cz: 0, color: 0xd8b13c },
+    { name: 'Deco Row', cx: 96, cz: 0, color: 0xd84f9f },
+    { name: 'Old Mercado', cx: -96, cz: 96, color: 0xc96a3a },
+    { name: 'Neon Mile', cx: 0, cz: 96, color: 0xff4fa3 },
+    { name: 'Keystone Field', cx: 96, cz: 96, color: 0x9a6ad0 }
   ];
+  city.districts = DIST;
+  city.buildings = [];
+  city.traffic = [];
+  city.peds = [];
+  city.parked = [];
 
-  var ROADS = [
-    { id: 'ave-coral', axis: 'z', at: -400, from: -450, to: 450, width: 14, name: 'Coral Ave' },
-    { id: 'ave-flamingo', axis: 'z', at: -300, from: -450, to: 450, width: 14, name: 'Flamingo Blvd' },
-    { id: 'ave-palmetto', axis: 'z', at: -200, from: -450, to: 450, width: 14, name: 'Palmetto Ave' },
-    { id: 'ave-bayline', axis: 'z', at: -100, from: -450, to: 450, width: 14, name: 'Bayline Ave' },
-    { id: 'ave-solmar', axis: 'z', at: 0, from: -450, to: 450, width: 14, name: 'Solmar Ave' },
-    { id: 'ave-deco', axis: 'z', at: 100, from: -450, to: 450, width: 14, name: 'Deco Row' },
-    { id: 'ave-mercado', axis: 'z', at: 200, from: -450, to: 450, width: 14, name: 'Mercado Ave' },
-    { id: 'ave-keystone', axis: 'z', at: 300, from: -450, to: 450, width: 14, name: 'Keystone Ave' },
-    { id: 'ave-pelican', axis: 'z', at: 400, from: -450, to: 450, width: 14, name: 'Pelican Way' },
-    { id: 'st-sunset', axis: 'x', at: -400, from: -450, to: 450, width: 14, name: 'Sunset St' },
-    { id: 'st-neon', axis: 'x', at: -300, from: -450, to: 450, width: 14, name: 'Neon Mile' },
-    { id: 'st-palmetto', axis: 'x', at: -200, from: -450, to: 450, width: 14, name: 'Palmetto St' },
-    { id: 'st-flamingo', axis: 'x', at: -100, from: -450, to: 450, width: 14, name: 'Flamingo St' },
-    { id: 'st-solmar', axis: 'x', at: 0, from: -450, to: 450, width: 14, name: 'Solmar St' },
-    { id: 'st-mercado', axis: 'x', at: 100, from: -450, to: 450, width: 14, name: 'Mercado St' },
-    { id: 'st-bayline', axis: 'x', at: 200, from: -450, to: 450, width: 14, name: 'Bayline St' },
-    { id: 'st-keystone', axis: 'x', at: 300, from: -450, to: 450, width: 14, name: 'Keystone St' },
-    { id: 'st-pelican', axis: 'x', at: 400, from: -450, to: 450, width: 14, name: 'Pelican St' }
-  ];
-
-  var LANDMARKS = [
-    { id: 'bank', name: 'Solmar National Bank', kind: 'bank', x: 50, z: -50 },
-    { id: 'hospital', name: 'St. Coral Hospital', kind: 'hospital', x: -150, z: 250 },
-    { id: 'police', name: 'Solmar PD HQ', kind: 'police', x: 150, z: 150 },
-    { id: 'hotel', name: 'Hotel Palmera', kind: 'hotel', x: -480, z: 0 },
-    { id: 'garage', name: "Jax's Garage", kind: 'garage', x: 350, z: 450 },
-    { id: 'safehouse', name: "Mara's Safehouse", kind: 'safehouse', x: 350, z: -250 },
-    { id: 'respray', name: 'Neon Respray', kind: 'respray', x: 50, z: -350 },
-    { id: 'books', name: 'FARO BOOKS', kind: 'shop', x: 250, z: 50 },
-    { id: 'gym', name: 'MANGO GYM', kind: 'shop', x: 250, z: 150 },
-    { id: 'cafe', name: 'TIDELINE CAFE', kind: 'shop', x: -480, z: 150 },
-    { id: 'shoes', name: 'ZAPATOS ALBA', kind: 'shop', x: 350, z: -50 },
-    { id: 'pharmacy', name: 'FARMACIA SOL', kind: 'shop', x: -250, z: -250 },
-    { id: 'club', name: 'CLUB VOLTAGE', kind: 'club', x: -50, z: -350 }
-  ];
-
-  var SPAWNS = {
-    player: { x: 0, z: 60, heading: 0 },
-    vehicles: [
-      { kind: 'sport', name: 'VENTO STRADA', x: 8, z: 60, heading: 0 },
-      { kind: 'sedan', name: 'PALMERA LX', x: -8, z: -40, heading: Math.PI },
-      { kind: 'taxi', name: 'SOLMAR CAB', x: 108, z: 150, heading: Math.PI / 2 },
-      { kind: 'muscle', name: 'SOLMAR GT', x: -92, z: -150, heading: 0 },
-      { kind: 'van', name: 'MERCADO VAN', x: 250, z: 60, heading: -Math.PI / 2 },
-      { kind: 'truck', name: 'BAYLINE HAULER', x: 350, z: 450, heading: Math.PI },
-      { kind: 'sport', name: 'VENTO STRADA', x: -450, z: 100, heading: Math.PI / 2 },
-      { kind: 'sedan', name: 'PALMERA LX', x: 50, z: -350, heading: Math.PI },
-      { kind: 'muscle', name: 'SOLMAR GT', x: -250, z: -250, heading: 0 },
-      { kind: 'taxi', name: 'SOLMAR CAB', x: 150, z: 250, heading: -Math.PI / 2 }
-    ],
-    missions: {
-      bank: { x: 50, z: -50, name: 'Solmar National Bank' },
-      marina: { x: -250, z: 450, name: 'Pelican Marina' },
-      mercado: { x: 350, z: 50, name: 'Old Mercado' },
-      hotel: { x: -480, z: 0, name: 'Hotel Palmera' },
-      garage: { x: 350, z: 450, name: "Jax's Garage" },
-      hospital: { x: -150, z: 250, name: 'St. Coral Hospital' },
-      police: { x: 150, z: 150, name: 'Solmar PD HQ' },
-      neon: { x: -50, z: -350, name: 'Neon Mile' }
-    },
-    shops: [
-      { id: 'books', kind: 'shop', name: 'FARO BOOKS', x: 250, z: 50 },
-      { id: 'gym', kind: 'shop', name: 'MANGO GYM', x: 250, z: 150 },
-      { id: 'cafe', kind: 'shop', name: 'TIDELINE CAFE', x: -480, z: 150 },
-      { id: 'shoes', kind: 'shop', name: 'ZAPATOS ALBA', x: 350, z: -50 },
-      { id: 'pharmacy', kind: 'shop', name: 'FARMACIA SOL', x: -250, z: -250 },
-      { id: 'club', kind: 'club', name: 'CLUB VOLTAGE', x: -50, z: -350 }
-    ],
-    safehouse: { x: 350, z: -250, name: "Mara's Safehouse" },
-    respray: { x: 50, z: -350, name: 'Neon Respray' },
-    hospital: { x: -150, z: 250, name: 'St. Coral Hospital' },
-    police: { x: 150, z: 150, name: 'Solmar PD HQ' },
-    heliPad: { x: 150, z: 150, y: 42 }
-  };
-
-  city.districts = DISTRICTS;
-  city.roads = ROADS;
-  city.landmarks = LANDMARKS;
-  city.spawnPoints = function () { return SPAWNS; };
-  city.districtAt = function (x, z) { return SB.districtAt(x, z); };
-  city.roadNameAt = function (x, z) { return SB.streetAt(x, z); };
-
-  var M = null;
-  var GEO = null;
-
-  function buildMaterials() {
-    if (M) return M;
-    var L = THREE.MeshLambertMaterial;
-    var B = THREE.MeshBasicMaterial;
-    M = {
-      asphalt: new L({ color: 0x2e3236 }),
-      sidewalk: new L({ color: 0x8f8a80 }),
-      sand: new L({ color: 0xe8d5a8 }),
-      water: new L({ color: 0x2a7fa8 }),
-      grass: new L({ color: 0x5a8a4a }),
-      concrete: new L({ color: 0x9a938a }),
-      groundBase: new L({ color: 0x5a6355 }),
-      roof: new L({ color: 0x54503f }),
-      glass: new L({ color: 0x2a3a4a }),
-      trunk: new L({ color: 0x8a6a42 }),
-      palmLeaf: new L({ color: 0x3a8a3a }),
-      treeLeaf: new L({ color: 0x4a7a3a }),
-      lampPole: new L({ color: 0x3a3a3a }),
-      lampHead: new B({ color: 0xffe8a0 }),
-      white: new L({ color: 0xf0ead8 }),
-      hospitalWhite: new L({ color: 0xe8e8e8 }),
-      policeBlue: new L({ color: 0x4a6a9a }),
-      bankStone: new L({ color: 0xd8c8b0 }),
-      hotelPink: new L({ color: 0xe8a8b8 }),
-      garageGray: new L({ color: 0x7a7a7a }),
-      neonPink: new B({ color: 0xff2a7a }),
-      neonCyan: new B({ color: 0x2ad4ff }),
-      neonYellow: new B({ color: 0xffd42a }),
-      neonPurple: new B({ color: 0xa42aff }),
-      headlight: new B({ color: 0xfff2c0 }),
-      taillight: new B({ color: 0xff2a2a }),
-      tire: new L({ color: 0x1a1a1a }),
-      skinTones: [0xc98a5a, 0x8a5a3a, 0xe8b88a, 0x6a4a2a].map(function (c) { return new L({ color: c }); }),
-      shirtColors: [0xd84a4a, 0x4a7ad8, 0x4ad84a, 0xd8d84a, 0xd84ad8, 0xffffff, 0x2a2a2a, 0xff8c42].map(function (c) { return new L({ color: c }); }),
-      carColors: [0xd83a3a, 0x3a6ad8, 0xd8d83a, 0x3ad83a, 0xff5a8a, 0xff8c42, 0xffffff, 0x2a2a2a, 0x7a3ad8].map(function (c) { return new L({ color: c }); }),
-      buildingPalette: [0xd8c8b0, 0xc8b8a0, 0xb8a888, 0xa89a90, 0x8a9ab0, 0xd0a080, 0xe0d0c0, 0x6a7a8a, 0xc8a0a0, 0xa0b8a0].map(function (c) { return new L({ color: c }); })
-    };
-    GEO = {
-      box: new THREE.BoxGeometry(1, 1, 1),
-      wheel: new THREE.CylinderGeometry(0.35, 0.35, 0.3, 10),
-      pedHead: new THREE.SphereGeometry(0.21, 10, 8),
-      trunk: new THREE.CylinderGeometry(0.16, 0.28, 5, 5),
-      palmCrown: new THREE.IcosahedronGeometry(1.7, 0),
-      treeCrown: new THREE.SphereGeometry(2.2, 8, 6),
-      lampPole: new THREE.CylinderGeometry(0.08, 0.1, 5.5, 6),
-      roofPyramid: new THREE.ConeGeometry(1, 1, 4),
-      sunDisc: new THREE.CircleGeometry(42, 24),
-      cloudPuff: new THREE.SphereGeometry(1, 8, 6)
-    };
-    return M;
+  function districtAt(x, z) {
+    var bx = x < -48 ? 0 : x < 48 ? 1 : 2, bz = z < -48 ? 0 : z < 48 ? 1 : 2;
+    return DIST[bz * 3 + bx];
+  }
+  function textTex(txt, fg, bg, w, h, font) {
+    var c = document.createElement('canvas'); c.width = w || 256; c.height = h || 64;
+    var g = c.getContext('2d');
+    if (bg) { g.fillStyle = bg; g.fillRect(0, 0, c.width, c.height); }
+    g.font = font || 'bold 44px Arial';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.shadowColor = fg; g.shadowBlur = 16;
+    g.fillStyle = fg; g.fillText(txt, c.width / 2, c.height / 2 + 2);
+    g.shadowBlur = 0; g.fillText(txt, c.width / 2, c.height / 2 + 2);
+    return new T.CanvasTexture(c);
+  }
+  function winTex(base, rng) {
+    var c = document.createElement('canvas'); c.width = 128; c.height = 256;
+    var g = c.getContext('2d');
+    g.fillStyle = base; g.fillRect(0, 0, 128, 256);
+    for (var r = 0; r < 12; r++) for (var col = 0; col < 6; col++) {
+      var lit = rng() < 0.35;
+      g.fillStyle = lit ? '#ffd27a' : '#232833';
+      g.fillRect(8 + col * 20, 10 + r * 20, 12, 12);
+    }
+    return new T.CanvasTexture(c);
+  }
+  function stripeTex(c1, c2) {
+    var c = document.createElement('canvas'); c.width = 64; c.height = 64;
+    var g = c.getContext('2d');
+    for (var i = 0; i < 8; i++) { g.fillStyle = i % 2 ? c1 : c2; g.fillRect(i * 8, 0, 8, 64); }
+    return new T.CanvasTexture(c);
   }
 
-  function box(mat, w, h, d, x, y, z, parent) {
-    var m = new THREE.Mesh(GEO.box, mat);
-    m.scale.set(w, h, d);
-    m.position.set(x, y, z);
-    m.castShadow = true; m.receiveShadow = true;
-    (parent || SB.world.groups.buildings).add(m);
-    return m;
-  }
-
-  var facadeCache = {};
-  city.makeFacadeTexture = function (base, win, cols, rows, litRatio) {
-    var key = base + '|' + win + '|' + cols + '|' + rows + '|' + litRatio;
-    if (facadeCache[key]) return facadeCache[key];
-    var cv = document.createElement('canvas');
-    cv.width = 128; cv.height = 256;
-    var ctx = cv.getContext('2d');
-    ctx.fillStyle = '#' + ('000000' + base.toString(16)).slice(-6);
-    ctx.fillRect(0, 0, 128, 256);
-    var cw = 128 / cols, ch = 256 / rows;
-    for (var r = 0; r < rows; r++) {
-      for (var c = 0; c < cols; c++) {
-        var lit = SB.rng() < litRatio;
-        ctx.fillStyle = lit ? '#ffd88a' : '#' + ('000000' + win.toString(16)).slice(-6);
-        ctx.fillRect(c * cw + 3, r * ch + 4, cw - 6, ch - 8);
-      }
+  // --- kendaraan & orang (mesh kecil, material bersama sebisa mungkin) ---
+  var carBodyGeo = new T.BoxGeometry(1.9, 0.55, 4.2);
+  var carCabGeo = new T.BoxGeometry(1.6, 0.5, 2.0);
+  var axleGeo = new T.BoxGeometry(2.0, 0.35, 0.6);
+  var lampGeo = new T.BoxGeometry(1.5, 0.14, 0.1);
+  var axleMat = new T.MeshLambertMaterial({ color: 0x14141a });
+  var headMat = new T.MeshBasicMaterial({ color: 0xfff6c8 });
+  var tailMat = new T.MeshBasicMaterial({ color: 0xd81f2a });
+  city.makeCar = function (color, o) {
+    o = o || {};
+    var g = new T.Group();
+    var bodyMat = new T.MeshLambertMaterial({ color: color });
+    var body = new T.Mesh(carBodyGeo, bodyMat); body.position.y = 0.55; g.add(body);
+    var cab = new T.Mesh(carCabGeo, new T.MeshLambertMaterial({ color: 0x1c2733 }));
+    cab.position.set(0, 1.05, 0.25); g.add(cab);
+    var a1 = new T.Mesh(axleGeo, axleMat); a1.position.set(0, 0.3, 1.35); g.add(a1);
+    var a2 = new T.Mesh(axleGeo, axleMat); a2.position.set(0, 0.3, -1.35); g.add(a2);
+    var hl = new T.Mesh(lampGeo, headMat); hl.position.set(0, 0.62, -2.12); g.add(hl);
+    var tl = new T.Mesh(lampGeo, tailMat); tl.position.set(0, 0.62, 2.12); g.add(tl);
+    if (o.cruiser) {
+      var bar = new T.Mesh(new T.BoxGeometry(1.1, 0.16, 0.4),
+        new T.MeshBasicMaterial({ color: 0x2244ff }));
+      bar.position.set(0, 1.38, 0.25); g.add(bar);
+      var bar2 = new T.Mesh(new T.BoxGeometry(0.5, 0.16, 0.42),
+        new T.MeshBasicMaterial({ color: 0xff2233 }));
+      bar2.position.set(0.55, 1.38, 0.25); g.add(bar2);
     }
-    var tex = new THREE.CanvasTexture(cv);
-    tex.encoding = THREE.sRGBEncoding;
-    facadeCache[key] = tex;
-    return tex;
+    if (o.taxi) {
+      var sign = new T.Mesh(new T.BoxGeometry(0.7, 0.18, 0.4),
+        new T.MeshBasicMaterial({ color: 0xffe94f }));
+      sign.position.set(0, 1.4, 0.25); g.add(sign);
+    }
+    g.userData.kind = o.cruiser ? 'cruiser' : o.taxi ? 'taxi' : o.truck ? 'truck' : 'car';
+    return g;
+  };
+  var legGeo = new T.BoxGeometry(0.5, 0.7, 0.3);
+  var torsoGeo = new T.BoxGeometry(0.62, 0.75, 0.34);
+  var headGeo = new T.BoxGeometry(0.34, 0.34, 0.34);
+  var skinMat = new T.MeshLambertMaterial({ color: 0xc98a5f });
+  var pantsMat = new T.MeshLambertMaterial({ color: 0x2a2a3a });
+  city.makePerson = function (shirt, cop) {
+    var g = new T.Group();
+    var legs = new T.Mesh(legGeo, pantsMat); legs.position.y = 0.35; g.add(legs);
+    var torso = new T.Mesh(torsoGeo, new T.MeshLambertMaterial({ color: shirt }));
+    torso.position.y = 1.1; g.add(torso);
+    var head = new T.Mesh(headGeo, skinMat); head.position.y = 1.65; g.add(head);
+    if (cop) {
+      var cap = new T.Mesh(new T.BoxGeometry(0.4, 0.12, 0.4),
+        new T.MeshLambertMaterial({ color: 0x1e2f5e }));
+      cap.position.y = 1.86; g.add(cap);
+    }
+    return g;
   };
 
-  function facadeMaterial(base, win, cols, rows, lit) {
-    var tex = city.makeFacadeTexture(base, win, cols, rows, lit);
-    return new THREE.MeshLambertMaterial({ map: tex });
-  }
-
-  function signPlane(text, w, h, opts) {
-    opts = opts || {};
-    var tex = SB.makeTextTexture(text, {
-      w: opts.tw || 512, h: opts.th || 128,
-      fg: opts.fg || '#ffffff', bg: opts.bg || null,
-      font: opts.font || ('bold ' + Math.floor((opts.th || 128) * 0.42) + 'px Arial, sans-serif')
-    });
-    var mat = opts.neon
-      ? new THREE.MeshBasicMaterial({ map: tex, transparent: true })
-      : new THREE.MeshLambertMaterial({ map: tex, transparent: true, emissive: 0x222222 });
-    var m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
-    m.position.set(opts.x || 0, opts.y || 0, opts.z || 0);
-    if (opts.ry !== undefined) m.rotation.y = opts.ry;
-    if (opts.rx !== undefined) m.rotation.x = opts.rx;
-    return m;
-  }
-
-  function addSignToGroup(group, text, w, h, opts) {
-    var s = signPlane(text, w, h, opts);
-    group.add(s);
-    return s;
-  }
-
-  city.buildGround = function () {
-    var g = SB.world.groups.city;
-    var base = new THREE.Mesh(new THREE.PlaneGeometry(1120, 1120), M.groundBase);
-    base.rotation.x = -Math.PI / 2;
-    base.position.set(-40, 0, 0);
-    base.receiveShadow = true;
-    g.add(base);
-  };
-
-  city.buildOcean = function () {
-    var g = SB.world.groups.city;
-    var ocean = new THREE.Mesh(new THREE.PlaneGeometry(420, 1060), M.water);
-    ocean.rotation.x = -Math.PI / 2;
-    ocean.position.set(-770, 0.01, 0);
-    ocean.receiveShadow = true;
-    g.add(ocean);
-  };
-
-  city.buildRoads = function () {
-    var g = SB.world.groups.roads;
-    var i, r, mesh;
-    for (i = 0; i < ROADS.length; i++) {
-      r = ROADS[i];
-      var len = r.to - r.from;
-      mesh = new THREE.Mesh(new THREE.PlaneGeometry(r.axis === 'x' ? len : r.width, r.axis === 'x' ? r.width : len), M.asphalt);
-      mesh.rotation.x = -Math.PI / 2;
-      if (r.axis === 'x') mesh.position.set((r.from + r.to) / 2, 0.02, r.at);
-      else mesh.position.set(r.at, 0.02, (r.from + r.to) / 2);
-      mesh.receiveShadow = true;
-      g.add(mesh);
+  // --- bangun kota ---
+  city.attach = function (scene) {
+    city.scene = scene;
+    var rng = SB.engine.rng(20261120);
+    var i, j;
+    // tanah dasar + blok + jalan + pantai/laut
+    var ground = new T.Mesh(new T.PlaneGeometry(340, 340),
+      new T.MeshLambertMaterial({ color: 0x8f8578 }));
+    ground.rotation.x = -Math.PI / 2; ground.position.y = -0.05; scene.add(ground);
+    var blockMats = [
+      new T.MeshLambertMaterial({ color: 0x9a8f7a }),
+      new T.MeshLambertMaterial({ color: 0x8a8a84 }),
+      new T.MeshLambertMaterial({ color: 0x6a8a52 }),
+      new T.MeshLambertMaterial({ color: 0xa89a72 })
+    ];
+    var blockGeo = new T.PlaneGeometry(34, 34);
+    var parks = [[0, 0], [5, 5], [0, 5]];
+    var groundMats = [blockMats[0], blockMats[1], blockMats[3]]; // blok biasa: tanpa hijau
+    for (i = 0; i < 6; i++) for (j = 0; j < 6; j++) {
+      var isPark = false;
+      for (var k = 0; k < parks.length; k++) if (parks[k][0] === i && parks[k][1] === j) isPark = true;
+      var b = new T.Mesh(blockGeo, isPark ? blockMats[2] : groundMats[Math.floor(rng() * 3)]);
+      b.rotation.x = -Math.PI / 2; b.position.set(BLOCKS[i], 0, BLOCKS[j]); scene.add(b);
     }
-
-    var dashGeo = new THREE.BoxGeometry(0.3, 0.04, 3);
-    var dashMat = new THREE.MeshBasicMaterial({ color: 0xd8c84a });
-    var count = 0;
-    for (i = 0; i < ROADS.length; i++) { count += Math.floor((ROADS[i].to - ROADS[i].from) / 16); }
-    var inst = new THREE.InstancedMesh(dashGeo, dashMat, count);
-    var m4 = new THREE.Matrix4();
-    var idx = 0;
-    for (i = 0; i < ROADS.length; i++) {
-      r = ROADS[i];
-      for (var s = r.from + 8; s < r.to - 4; s += 16) {
-        if (r.axis === 'x') m4.makeRotationY(Math.PI / 2);
-        else m4.makeRotationY(0);
-        m4.setPosition(r.axis === 'x' ? s : r.at, 0.05, r.axis === 'x' ? r.at : s);
-        inst.setMatrixAt(idx++, m4);
-      }
+    var roadTexC = document.createElement('canvas'); roadTexC.width = 64; roadTexC.height = 128;
+    var rg = roadTexC.getContext('2d');
+    rg.fillStyle = '#3a3542'; rg.fillRect(0, 0, 64, 128);
+    rg.fillStyle = '#d8b13c'; rg.fillRect(30, 8, 4, 40); rg.fillRect(30, 72, 4, 40);
+    var roadTex = new T.CanvasTexture(roadTexC);
+    roadTex.wrapS = roadTex.wrapT = T.RepeatWrapping; roadTex.repeat.set(1, 24);
+    var roadMat = new T.MeshLambertMaterial({ map: roadTex });
+    var roadTexH = roadTex.clone(); roadTexH.rotation = Math.PI / 2;
+    roadTexH.center.set(0.5, 0.5); roadTexH.needsUpdate = true;
+    var roadMatH = new T.MeshLambertMaterial({ map: roadTexH });
+    var roadGeoV = new T.PlaneGeometry(12, 312), roadGeoH = new T.PlaneGeometry(312, 12);
+    for (i = 0; i < 7; i++) {
+      var rv = new T.Mesh(roadGeoV, roadMat);
+      rv.rotation.x = -Math.PI / 2; rv.position.set(ROADS[i], 0.06, 0); scene.add(rv);
+      var rh = new T.Mesh(roadGeoH, roadMatH);
+      rh.rotation.x = -Math.PI / 2; rh.position.set(0, 0.06, ROADS[i]); scene.add(rh);
     }
-    inst.count = idx;
-    inst.receiveShadow = true;
-    g.add(inst);
-  };
-
-  city.buildSidewalks = function () {
-    var g = SB.world.groups.roads;
-    for (var i = 0; i < ROADS.length; i++) {
-      var r = ROADS[i];
-      var len = r.to - r.from;
-      for (var side = -1; side <= 1; side += 2) {
-        var off = side * (r.width / 2 + 2);
-        var mesh = new THREE.Mesh(
-          new THREE.PlaneGeometry(r.axis === 'x' ? len : 4, r.axis === 'x' ? 4 : len), M.sidewalk);
-        mesh.rotation.x = -Math.PI / 2;
-        if (r.axis === 'x') mesh.position.set((r.from + r.to) / 2, 0.04, r.at + off);
-        else mesh.position.set(r.at + off, 0.04, (r.from + r.to) / 2);
-        mesh.receiveShadow = true;
-        g.add(mesh);
-      }
+    // pasir + laut (barat) + payung pantai
+    var sand = new T.Mesh(new T.PlaneGeometry(35, 340),
+      new T.MeshLambertMaterial({ color: 0xd9c08a }));
+    sand.rotation.x = -Math.PI / 2; sand.position.set(-187.5, 0, 0); scene.add(sand);
+    var seaC = document.createElement('canvas'); seaC.width = 128; seaC.height = 128;
+    var sg = seaC.getContext('2d');
+    sg.fillStyle = '#1e6f9e'; sg.fillRect(0, 0, 128, 128);
+    sg.strokeStyle = 'rgba(255,255,255,0.35)'; sg.lineWidth = 3;
+    for (i = 0; i < 6; i++) {
+      sg.beginPath(); sg.moveTo(0, 14 + i * 20);
+      sg.bezierCurveTo(40, 8 + i * 20, 80, 20 + i * 20, 128, 14 + i * 20); sg.stroke();
     }
-  };
-
-  city.buildBeach = function () {
-    var g = SB.world.groups.city;
-    var sand = new THREE.Mesh(new THREE.PlaneGeometry(112, 920), M.sand);
-    sand.rotation.x = -Math.PI / 2;
-    sand.position.set(-505, 0.03, 0);
-    sand.receiveShadow = true;
-    g.add(sand);
-
-    var walk = new THREE.Mesh(new THREE.PlaneGeometry(8, 900), M.concrete);
-    walk.rotation.x = -Math.PI / 2;
-    walk.position.set(-447, 0.04, 0);
-    walk.receiveShadow = true;
-    g.add(walk);
-
-    var colors = [0xff5a5a, 0x2ad4ff, 0xffd42a, 0xff8c42];
-    for (var i = 0; i < 14; i++) {
-      var z = -420 + i * 62 + SB.rand(-8, 8);
-      var x = -490 + SB.rand(-14, 14);
-      var pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.4, 6), M.lampPole);
-      pole.position.set(x, 1.2, z);
-      g.add(pole);
-      var umb = new THREE.Mesh(new THREE.ConeGeometry(2.2, 1, 8),
-        new THREE.MeshLambertMaterial({ color: colors[i % colors.length] }));
-      umb.position.set(x, 2.6, z);
-      umb.castShadow = true;
-      g.add(umb);
+    city.seaTex = new T.CanvasTexture(seaC);
+    city.seaTex.wrapS = city.seaTex.wrapT = T.RepeatWrapping;
+    city.seaTex.repeat.set(6, 8);
+    var sea = new T.Mesh(new T.PlaneGeometry(265, 340),
+      new T.MeshLambertMaterial({ map: city.seaTex }));
+    sea.rotation.x = -Math.PI / 2; sea.position.set(-337.5, -0.15, 0); scene.add(sea);
+    var umbMat = new T.MeshLambertMaterial({ color: 0xe85f7a });
+    for (i = 0; i < 5; i++) {
+      var um = new T.Mesh(new T.ConeGeometry(2.2, 1.1, 8), umbMat);
+      um.position.set(-178, 1.6, -120 + i * 60); scene.add(um);
+      var pole = new T.Mesh(new T.CylinderGeometry(0.08, 0.08, 1.6, 5),
+        new T.MeshLambertMaterial({ color: 0x8a6a3a }));
+      pole.position.set(-178, 0.8, -120 + i * 60); scene.add(pole);
     }
-  };
-
-  city.buildMarina = function () {
-    var g = SB.world.groups.city;
-
-    var water = new THREE.Mesh(new THREE.PlaneGeometry(400, 170), M.water);
-    water.rotation.x = -Math.PI / 2;
-    water.position.set(-250, 0.02, 435);
-    water.receiveShadow = true;
-    g.add(water);
-
-    var docks = new THREE.Mesh(new THREE.PlaneGeometry(500, 170), M.concrete);
-    docks.rotation.x = -Math.PI / 2;
-    docks.position.set(200, 0.02, 435);
-    docks.receiveShadow = true;
-    g.add(docks);
-
-    for (var p = 0; p < 4; p++) {
-      var px = -420 + p * 90;
-      box(M.concrete, 10, 1, 90, px, 0.5, 460, g).receiveShadow = true;
-      for (var b = 0; b < 3; b++) {
-        var bz = 425 + b * 28;
-        var hull = box(SB.pick(M.carColors), 6, 2, 16, px + 12, 1, bz, g);
-        hull.castShadow = true;
-        box(M.white, 4, 1.6, 8, px + 12, 2.8, bz, g);
-      }
-    }
-
-    var contColors = [0xd83a3a, 0x3a6ad8, 0xd8d83a, 0x3ad83a, 0xff8c42];
-    for (var w = 0; w < 5; w++) {
-      var wx = 20 + w * 80;
-      box(M.garageGray, 44, 12, 30, wx, 6, 420, g);
-      for (var c = 0; c < 4; c++) {
-        box(new THREE.MeshLambertMaterial({ color: contColors[(w + c) % contColors.length] }),
-          12, 3, 3, wx - 16 + c * 11, 1.5, 452 + (c % 2) * 5, g);
-      }
-    }
-  };
-
-  city.buildPark = function () {
-    var g = SB.world.groups.city;
-    var grass = new THREE.Mesh(new THREE.PlaneGeometry(300, 200), M.grass);
-    grass.rotation.x = -Math.PI / 2;
-    grass.position.set(0, 0.03, 250);
-    grass.receiveShadow = true;
-    g.add(grass);
-
-    var pond = new THREE.Mesh(new THREE.CircleGeometry(30, 20), M.water);
-    pond.rotation.x = -Math.PI / 2;
-    pond.position.set(50, 0.05, 300);
-    pond.receiveShadow = true;
-    g.add(pond);
-
-    var path1 = new THREE.Mesh(new THREE.PlaneGeometry(300, 6), M.sidewalk);
-    path1.rotation.x = -Math.PI / 2; path1.position.set(0, 0.04, 250); path1.receiveShadow = true;
-    g.add(path1);
-    var path2 = new THREE.Mesh(new THREE.PlaneGeometry(6, 200), M.sidewalk);
-    path2.rotation.x = -Math.PI / 2; path2.position.set(0, 0.04, 250); path2.receiveShadow = true;
-    g.add(path2);
-
-    for (var i = 0; i < 22; i++) {
-      var x = -140 + SB.rand(0, 280);
-      var z = 160 + SB.rand(0, 180);
-      if (Math.abs(x - 50) < 38 && Math.abs(z - 300) < 38) continue;
-      var trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 3, 6), M.trunk);
-      trunk.position.set(x, 1.5, z); trunk.castShadow = true;
-      g.add(trunk);
-      var crown = new THREE.Mesh(GEO.treeCrown, M.treeLeaf);
-      crown.position.set(x, 4.2, z); crown.castShadow = true;
-      g.add(crown);
-    }
-  };
-
-  function blockCenter(v) { return Math.floor(v / 100) * 100 + 50; }
-
-  function districtOfBlock(cx, cz) {
-    for (var i = 0; i < DISTRICTS.length; i++) {
-      var d = DISTRICTS[i];
-      if (cx >= d.x0 && cx <= d.x1 && cz >= d.z0 && cz <= d.z1) return d;
-    }
-    return null;
-  }
-
-  function addBuilding(cx, cz, w, h, d, mat, opts) {
-    opts = opts || {};
-    var g = SB.world.groups.buildings;
-    var body = new THREE.Mesh(GEO.box, mat);
-    body.scale.set(w, h, d);
-    body.position.set(cx, h / 2, cz);
-    body.castShadow = true; body.receiveShadow = true;
-    g.add(body);
-    if (opts.roof !== false) box(M.roof, w + 1, 1, d + 1, cx, h + 0.5, cz, g);
-    SB.addCollider(cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2);
-    return body;
-  }
-
-  city.buildBuildings = function () {
-    var reserved = {};
-    for (var li = 0; li < LANDMARKS.length; li++) {
-      var lm = LANDMARKS[li];
-      if (lm.x < -450 || lm.z > 400) continue;
-      reserved[blockCenter(lm.x) + ',' + blockCenter(lm.z)] = true;
-    }
-    for (var cx = -350; cx <= 350; cx += 100) {
-      for (var cz = -350; cz <= 350; cz += 100) {
-        if (reserved[cx + ',' + cz]) continue;
-        var d = districtOfBlock(cx, cz);
-        if (!d) continue;
-        if (d.id === 'keystone') continue;
-        if (d.id === 'downtown') {
-          var dist = Math.max(Math.abs(cx), Math.abs(cz));
-          var h = dist <= 50 ? SB.rand(90, 140) : dist <= 150 ? SB.rand(55, 95) : SB.rand(35, 60);
-          var w = SB.rand(42, 58);
-
-          addBuilding(cx, cz, 74, 10, 74, SB.pick(M.buildingPalette), { roof: false });
-          var mat = facadeMaterial(0x3a4a5a, 0x7fb2d9, 8, 16, 0.45);
-          addBuilding(cx, cz, w, h, w, mat);
-          if (h > 100) {
-            var ant = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 14, 6), M.lampPole);
-            ant.position.set(cx, h + 7, cz);
-            SB.world.groups.buildings.add(ant);
-          }
-          if (SB.chance(0.4)) addBuilding(cx + 26, cz + 26, 18, SB.rand(12, 22), 18, SB.pick(M.buildingPalette));
-        } else if (d.id === 'neon-mile') {
-          var h1 = SB.rand(12, 30);
-          addBuilding(cx - 16, cz, 30, h1, 40, facadeMaterial(0x5a3a5a, 0xff9ad4, 6, 4, 0.6));
-          addBuilding(cx + 18, cz, 26, SB.rand(10, 22), 36, SB.pick(M.buildingPalette));
-
-          addBuilding(cx, cz + 28, 62, 8, 12, SB.pick(M.buildingPalette), { roof: false });
-        } else if (d.id === 'palmetto') {
-          for (var k = 0; k < 3; k++) {
-            var hx = cx - 22 + (k % 2) * 40 + SB.rand(-4, 4);
-            var hz = cz - 20 + Math.floor(k / 2) * 42 + SB.rand(-4, 4);
-            var hh = SB.rand(8, 13);
-            var hw = SB.rand(16, 22);
-            addBuilding(hx, hz, hw, hh, hw, SB.pick(M.buildingPalette), { roof: false });
-            var roof = new THREE.Mesh(GEO.roofPyramid, M.roof);
-            roof.scale.set(hw + 2, 5, hw + 2);
-            roof.position.set(hx, hh + 2.5, hz);
-            roof.rotation.y = Math.PI / 4;
-            roof.castShadow = true;
-            SB.world.groups.buildings.add(roof);
-          }
-        } else if (d.id === 'mercado') {
-          addBuilding(cx - 14, cz, 34, SB.rand(8, 14), 44, SB.pick(M.buildingPalette));
-          addBuilding(cx + 20, cz, 28, SB.rand(8, 16), 40, SB.pick(M.buildingPalette));
-
-          var stallColors = [0xff5a5a, 0xffd42a, 0x2ad4ff, 0x4ad84a];
-          for (var s = 0; s < 3; s++) {
-            var sx = cx - 24 + s * 26;
-            box(new THREE.MeshLambertMaterial({ color: stallColors[s % stallColors.length] }),
-              12, 1, 10, sx, 3.4, cz + 28, SB.world.groups.buildings);
-            box(M.concrete, 10, 2.4, 8, sx, 1.2, cz + 28, SB.world.groups.buildings);
-          }
-        } else {
-          addBuilding(cx - 14, cz, 34, SB.rand(14, 26), 42, facadeMaterial(0xc8a0a8, 0xffe8c8, 6, 5, 0.35));
-          addBuilding(cx + 20, cz, 28, SB.rand(12, 24), 38, SB.pick(M.buildingPalette));
-          addBuilding(cx, cz + 26, 56, 9, 14, SB.pick(M.buildingPalette), { roof: false });
+    // --- 66 bangunan ---
+    var winMats = [
+      new T.MeshLambertMaterial({ map: winTex('#c9b18c', rng) }),
+      new T.MeshLambertMaterial({ map: winTex('#9aa0a8', rng) }),
+      new T.MeshLambertMaterial({ map: winTex('#b0704f', rng) }),
+      new T.MeshLambertMaterial({ map: winTex('#5f8a8a', rng) }),
+      new T.MeshLambertMaterial({ map: winTex('#d8d2c4', rng) })
+    ];
+    var boxGeo = new T.BoxGeometry(1, 1, 1);
+    var acGeo = new T.BoxGeometry(2, 1, 2);
+    var acMat = new T.MeshLambertMaterial({ color: 0x6a6a72 });
+    var palette = [0xc9b18c, 0x9aa0a8, 0xb0704f, 0x5f8a8a, 0xd8d2c4, 0xe88a5f, 0x7a9ab0];
+    var n = 0;
+    for (i = 0; i < 6 && n < 65; i++) for (j = 0; j < 6 && n < 65; j++) {
+      if (i === 3 && j === 3) continue; // blok bank: hanya bank, sightline bersih
+      var cnt = 1 + Math.floor(rng() * 3);
+      var downtown = (i === 2 || i === 3) && (j === 2 || j === 3);
+      for (var m = 0; m < cnt && n < 65; m++) {
+        var w = 10 + rng() * 12, d = 10 + rng() * 12;
+        var h = downtown ? 18 + rng() * 26 : 6 + rng() * 16;
+        if (i === 0) h = 4 + rng() * 6; // tepi pantai rendah
+        var bx = BLOCKS[i] + (rng() - 0.5) * (34 - w);
+        var bz = BLOCKS[j] + (rng() - 0.5) * (34 - d);
+        var mesh = new T.Mesh(boxGeo, winMats[Math.floor(rng() * winMats.length)]);
+        mesh.scale.set(w, h, d); mesh.position.set(bx, h / 2, bz); scene.add(mesh);
+        if (rng() < 0.4) {
+          var ac = new T.Mesh(acGeo, acMat);
+          ac.position.set(bx + (rng() - 0.5) * w * 0.4, h + 0.5, bz + (rng() - 0.5) * d * 0.4);
+          scene.add(ac);
         }
+        city.buildings.push({ x: bx, z: bz, w: w, d: d, h: h,
+          district: districtAt(bx, bz).name, mesh: mesh });
+        n++;
       }
     }
-
-    for (var t = 0; t < 3; t++) {
-      var hz2 = -200 + t * 200;
-      if (t === 1) continue;
-      addBuilding(-490, hz2, 34, SB.rand(38, 60), 30, facadeMaterial(0x2a5a7a, 0x9fd4ff, 6, 10, 0.5));
-    }
-  };
-
-  function landmarkBuilding(lm, w, h, d, mat, signText, signOpts) {
-    var body = addBuilding(lm.x, lm.z, w, h, d, mat);
-    var g = SB.world.groups.buildings;
-    var sign = signPlane(signText, signOpts.w || 26, signOpts.h || 5, {
-      x: lm.x, y: h + (signOpts.dy || 4), z: lm.z + d / 2 + 0.6,
-      fg: signOpts.fg || '#ffffff', bg: signOpts.bg || null, neon: !!signOpts.neon
-    });
-    g.add(sign);
-    return body;
-  }
-
-  city.buildLandmarks = function () {
-    var g = SB.world.groups.buildings;
-
-    landmarkBuilding(LANDMARKS[0], 56, 30, 44, facadeMaterial(0xd8c8b0, 0xffe8a0, 12, 5, 0.2),
-      'SOLMAR NATIONAL BANK', { w: 34, h: 5 });
-    for (var c = 0; c < 4; c++) {
-      var col = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 14, 8), M.white);
-      col.position.set(50 - 18 + c * 12, 7, -50 + 24);
-      col.castShadow = true;
-      g.add(col);
-    }
-
-    var hosp = LANDMARKS[1];
-    addBuilding(hosp.x, hosp.z, 48, 24, 40, M.hospitalWhite);
-    var crossCv = document.createElement('canvas');
-    crossCv.width = 128; crossCv.height = 128;
-    var cctx = crossCv.getContext('2d');
-    cctx.fillStyle = '#ffffff'; cctx.fillRect(0, 0, 128, 128);
-    cctx.fillStyle = '#d82a2a'; cctx.fillRect(54, 14, 20, 100); cctx.fillRect(14, 54, 100, 20);
-    var crossTex = new THREE.CanvasTexture(crossCv);
-    crossTex.encoding = THREE.sRGBEncoding;
-    var cross = new THREE.Mesh(new THREE.PlaneGeometry(10, 10),
-      new THREE.MeshBasicMaterial({ map: crossTex }));
-    cross.position.set(hosp.x, 26, hosp.z + 21);
-    g.add(cross);
-    addSignToGroup(g, 'ST. CORAL HOSPITAL', 30, 5, { x: hosp.x, y: 20, z: hosp.z + 21, fg: '#d82a2a' });
-
-    var pd = LANDMARKS[2];
-    addBuilding(pd.x, pd.z, 44, 20, 40, M.policeBlue);
-    var pad = new THREE.Mesh(new THREE.CircleGeometry(10, 20), new THREE.MeshBasicMaterial({ color: 0x2a2a2a }));
-    pad.rotation.x = -Math.PI / 2; pad.position.set(pd.x, 21.1, pd.z);
-    g.add(pad);
-    addSignToGroup(g, 'SOLMAR PD HQ', 24, 4, { x: pd.x, y: 18, z: pd.z + 21, fg: '#9fd4ff' });
-
-    landmarkBuilding(LANDMARKS[3], 36, 55, 30, facadeMaterial(0xe8a8b8, 0xffe8a0, 6, 12, 0.5),
-      'HOTEL PALMERA', { w: 28, h: 5, fg: '#ff2a7a' });
-
-    landmarkBuilding(LANDMARKS[4], 40, 10, 30, M.garageGray, "JAX'S GARAGE", { w: 24, h: 4, dy: 2 });
-    landmarkBuilding(LANDMARKS[5], 22, 11, 20, new THREE.MeshLambertMaterial({ color: 0xd8a0a0 }),
-      "MARA'S SAFEHOUSE", { w: 22, h: 4, dy: 2 });
-    landmarkBuilding(LANDMARKS[6], 26, 9, 22, M.concrete, 'NEON RESPRAY', { w: 22, h: 4, dy: 2, neon: true, fg: '#2ad4ff' });
-    landmarkBuilding(LANDMARKS[7], 30, 10, 26, facadeMaterial(0xc8b060, 0xffe8a0, 6, 2, 0.3), 'FARO BOOKS', { w: 20, h: 4, dy: 2 });
-    landmarkBuilding(LANDMARKS[8], 28, 12, 24, facadeMaterial(0x60a860, 0xffe8a0, 6, 2, 0.3), 'MANGO GYM', { w: 20, h: 4, dy: 2 });
-    landmarkBuilding(LANDMARKS[9], 30, 12, 26, facadeMaterial(0x60a8c8, 0xffe8a0, 6, 2, 0.3), 'TIDELINE CAFE', { w: 24, h: 4, dy: 2 });
-    landmarkBuilding(LANDMARKS[10], 28, 10, 24, facadeMaterial(0xc860a0, 0xffe8a0, 6, 2, 0.3), 'ZAPATOS ALBA', { w: 22, h: 4, dy: 2 });
-    landmarkBuilding(LANDMARKS[11], 26, 10, 22, facadeMaterial(0x60c860, 0xffe8a0, 6, 2, 0.3), 'FARMACIA SOL', { w: 22, h: 4, dy: 2 });
-    landmarkBuilding(LANDMARKS[12], 34, 16, 28, new THREE.MeshLambertMaterial({ color: 0x2a2a3a }), 'CLUB VOLTAGE',
-      { w: 26, h: 5, dy: 2, neon: true, fg: '#ff2a7a' });
-  };
-
-  city.buildPalms = function () {
-    var positions = [];
-    var z;
-    for (z = -440; z <= 440; z += 28) positions.push([-462, z]);
-    for (var x = -400; x <= 400; x += 100) {
-      for (z = -420; z <= 420; z += 60) {
-        if (SB.chance(0.5)) positions.push([x + 11, z]);
-        if (SB.chance(0.5)) positions.push([x - 11, z]);
+    // --- bank "SOLMAR NATIONAL BANK" (wajah barat ke avenue x=0) ---
+    var removed = 0;
+    for (i = city.buildings.length - 1; i >= 0; i--) {
+      var bd = city.buildings[i];
+      if (Math.abs(bd.x - 26) < 14 && Math.abs(bd.z - 8) < 14) {
+        scene.remove(bd.mesh); city.buildings.splice(i, 1); removed++;
       }
     }
-    for (var i = 0; i < 10; i++) positions.push([-140 + SB.rand(0, 280), 160 + SB.rand(0, 180)]);
-    var n = positions.length;
-    var trunks = new THREE.InstancedMesh(GEO.trunk, M.trunk, n);
-    var crowns = new THREE.InstancedMesh(GEO.palmCrown, M.palmLeaf, n);
-    var m4 = new THREE.Matrix4();
-    var q = new THREE.Quaternion();
-    var e = new THREE.Euler();
-    var s = new THREE.Vector3();
-    for (var j = 0; j < n; j++) {
-      var px = positions[j][0], pz = positions[j][1];
-      var sc = SB.rand(0.85, 1.25);
-      e.set(0, SB.rand(0, Math.PI * 2), SB.rand(-0.06, 0.06)); q.setFromEuler(e);
-      m4.compose(new THREE.Vector3(px, 2.5 * sc, pz), q, new THREE.Vector3(sc, sc, sc));
-      trunks.setMatrixAt(j, m4);
-      m4.compose(new THREE.Vector3(px, 5.4 * sc, pz), q, new THREE.Vector3(sc, sc * 0.55, sc));
-      crowns.setMatrixAt(j, m4);
+    var bank = new T.Mesh(boxGeo, new T.MeshLambertMaterial({ color: 0x2a3f66 }));
+    bank.scale.set(20, 16, 18); bank.position.set(26, 8, 8); scene.add(bank);
+    var colGeo = new T.BoxGeometry(1.2, 12, 1.2);
+    var colMat = new T.MeshLambertMaterial({ color: 0xd8d2c4 });
+    for (i = 0; i < 4; i++) {
+      var col = new T.Mesh(colGeo, colMat);
+      col.position.set(15.2, 6, 1 + i * 4.6); scene.add(col);
     }
-    trunks.castShadow = true; crowns.castShadow = true;
-    SB.world.groups.props.add(trunks);
-    SB.world.groups.props.add(crowns);
-  };
-
-  city.buildNeon = function () {
-    var g = SB.world.groups.props;
-
-    var neonTexts = ['NEON MILE', 'FLAMINGO FM 88.1', 'TACOS SOL', 'PIZZA LUNA', 'ARCADE', 'MOTEL SOL', 'DONUTS 24H', 'LIQUOR'];
-    var neonColors = ['#ff2a7a', '#2ad4ff', '#ffd42a', '#a42aff'];
-    for (var i = 0; i < neonTexts.length; i++) {
-      var x = -280 + i * 80;
-      var s = signPlane(neonTexts[i], 22, 4, {
-        x: x, y: SB.rand(8, 16), z: -340 + 0.6, ry: Math.PI,
-        fg: neonColors[i % neonColors.length], neon: true
-      });
-      g.add(s);
+    var bankSign = new T.Mesh(new T.PlaneGeometry(16, 3.2),
+      new T.MeshBasicMaterial({ map: textTex('SOLMAR NATIONAL BANK', '#f5d76a', '#12264d', 1024, 128, 'bold 64px Arial') }));
+    bankSign.position.set(15.8, 13.5, 8); bankSign.rotation.y = -Math.PI / 2; scene.add(bankSign);
+    city.bank = { x: 26, z: 8, mesh: bank, sign: bankSign };
+    city.buildings.push({ x: 26, z: 8, w: 20, d: 18, h: 16, district: 'Downtown', mesh: bank });
+    // top-up ke 66 bangunan persis (ganti yang digusur bank)
+    while (city.buildings.length < 66) {
+      var bi = Math.floor(rng() * 6), bj = Math.floor(rng() * 6);
+      if (bi === 3 && bj === 3) continue; // blok bank tetap kosong
+      var uw = 8 + rng() * 8, ud = 8 + rng() * 8, uh = 5 + rng() * 9;
+      var ux = BLOCKS[bi] + (rng() - 0.5) * (34 - uw);
+      var uz = BLOCKS[bj] + (rng() - 0.5) * (34 - ud);
+      if (Math.abs(ux - 26) < 14 && Math.abs(uz - 8) < 14) continue;
+      var um = new T.Mesh(boxGeo, winMats[Math.floor(rng() * winMats.length)]);
+      um.scale.set(uw, uh, ud); um.position.set(ux, uh / 2, uz); scene.add(um);
+      city.buildings.push({ x: ux, z: uz, w: uw, d: ud, h: uh,
+        district: districtAt(ux, uz).name, mesh: um });
     }
-
+    // jaga-jaga: pangkas ke 66 persis (jangan pernah potong bank)
+    while (city.buildings.length > 66) {
+      var idx = city.buildings[0].mesh === city.bank.mesh ? 1 : 0;
+      var gone = city.buildings.splice(idx, 1)[0];
+      scene.remove(gone.mesh);
+    }
+    // landmark: PD HQ, hospital, hotel
+    var marks = [
+      { txt: 'SOLMAR PD HQ', near: [72, -24], fg: '#8fd0ff', bg: '#10233d' },
+      { txt: 'GENERAL HOSPITAL', near: [-72, -72], fg: '#ff8a8a', bg: '#3d1020' },
+      { txt: 'HOTEL MIRAMAR', near: [72, 72], fg: '#ffe94f', bg: '#1a2a10' }
+    ];
+    for (i = 0; i < marks.length; i++) {
+      var best = null, bd2 = 1e9;
+      for (j = 0; j < city.buildings.length; j++) {
+        var bb = city.buildings[j];
+        var dd = (bb.x - marks[i].near[0]) * (bb.x - marks[i].near[0]) + (bb.z - marks[i].near[1]) * (bb.z - marks[i].near[1]);
+        if (dd < bd2) { bd2 = dd; best = bb; }
+      }
+      if (best) {
+        var sgn = new T.Mesh(new T.PlaneGeometry(12, 2.2),
+          new T.MeshBasicMaterial({ map: textTex(marks[i].txt, marks[i].fg, marks[i].bg, 512, 96, 'bold 52px Arial') }));
+        sgn.position.set(best.x, best.h + 1.4, best.z);
+        sgn.rotation.y = best.x >= 0 ? -Math.PI / 2 : Math.PI / 2;
+        scene.add(sgn);
+      }
+    }
+    // --- 32 neon (BAR + PIZZA dipaksa di avenue x=0 dekat cover) ---
+    var neons = ['BAR', 'PIZZA', '24H', 'HOTEL', 'CLUB', 'TACOS', 'BEER', 'NEON', 'GYM',
+      'CAFE', 'DISCO', 'MOTEL', 'RAMEN', 'KTV', 'DANCE', 'SLOTS', 'WINE', 'BBQ', 'SPA',
+      'INK', 'PHO', 'DIVE', 'LIVE', 'OPEN', 'COOL', 'VAPE', 'POOL', 'JAZZ', 'ROCK',
+      'SUSHI', 'DINER', 'NITE'];
+    var neonCols = [0xff4fa3, 0x4fd8ff, 0xffe94f, 0x7dff6a, 0xff8a3d, 0xc96aff];
+    function neonSign(txt, b, y, faceX) {
+      var col = neonCols[Math.floor(rng() * neonCols.length)];
+      var fg = '#' + ('000000' + col.toString(16)).slice(-6);
+      var p = new T.Mesh(new T.PlaneGeometry(6.5, 1.7),
+        new T.MeshBasicMaterial({ map: textTex(txt, fg, 'rgba(10,8,18,0.85)'), transparent: true, side: T.DoubleSide }));
+      if (faceX) { p.position.set(b.x + (b.x >= 0 ? -b.w / 2 - 0.2 : b.w / 2 + 0.2), y, b.z); p.rotation.y = b.x >= 0 ? -Math.PI / 2 : Math.PI / 2; }
+      else { p.position.set(b.x, y, b.z + (b.z >= 0 ? -b.d / 2 - 0.2 : b.d / 2 + 0.2)); p.rotation.y = b.z >= 0 ? Math.PI : 0; }
+      scene.add(p);
+      return p;
+    }
+    function nearestB(x, z) {
+      var best = null, bd = 1e9;
+      for (var q = 0; q < city.buildings.length; q++) {
+        var bb = city.buildings[q];
+        var dd = (bb.x - x) * (bb.x - x) + (bb.z - z) * (bb.z - z);
+        if (dd < bd) { bd = dd; best = bb; }
+      }
+      return best;
+    }
+    neonSign('BAR', nearestB(24, 40), 5, true);
+    neonSign('PIZZA', nearestB(-24, 28), 4.5, true);
+    var placed = 2;
+    while (placed < 32) {
+      var b = city.buildings[Math.floor(rng() * city.buildings.length)];
+      if (b.mesh === city.bank.mesh) continue;
+      neonSign(neons[placed], b, 3 + rng() * 6, rng() < 0.7);
+      placed++;
+    }
+    // --- billboard ---
     var boards = [
-      { text: 'FLAMINGO FM\n88.1', x: -50, z: -150, y: 96, ry: 0, fg: '#ff2a7a' },
-      { text: 'SOLMAR BAY', x: -480, z: 0, y: 62, ry: -Math.PI / 2, fg: '#2ad4ff' },
-      { text: 'WAVE 104', x: 50, z: 50, y: 70, ry: Math.PI, fg: '#ffd42a' },
-      { text: 'CLUB VOLTAGE', x: -50, z: -350, y: 22, ry: 0, fg: '#ff2a7a' },
-      { text: 'NEON MILE', x: 0, z: -400, y: 30, ry: 0, fg: '#a42aff' }
+      { txt: 'FLAMINGO FM', x: -30, z: -100, fg: '#ff4fa3', bg: '#1a1030' },
+      { txt: 'VENTO STRADA', x: 30, z: -60, fg: '#ffe94f', bg: '#10233d' },
+      { txt: 'SOLMAR BAY', x: -30, z: -40, fg: '#4fd8ff', bg: '#0a1a2a' },
+      { txt: 'CLUB VOLTAGE', x: -30, z: -80, fg: '#c96aff', bg: '#1a0a2a' }
     ];
-    for (var b = 0; b < boards.length; b++) {
-      var bd = boards[b];
-      var bs = signPlane(bd.text, 34, 12, { x: bd.x, y: bd.y, z: bd.z, ry: bd.ry, fg: bd.fg, neon: true, th: 256 });
-      g.add(bs);
+    for (i = 0; i < boards.length; i++) {
+      var bp = new T.Mesh(new T.PlaneGeometry(15, 5),
+        new T.MeshBasicMaterial({ map: textTex(boards[i].txt, boards[i].fg, boards[i].bg, 512, 160, 'bold 72px Arial'), side: T.DoubleSide }));
+      bp.position.set(boards[i].x, 10, boards[i].z);
+      bp.rotation.y = boards[i].x >= 0 ? -0.35 : 0.35;
+      scene.add(bp);
+      var post = new T.Mesh(new T.CylinderGeometry(0.3, 0.3, 7.5, 6),
+        new T.MeshLambertMaterial({ color: 0x3a3a44 }));
+      post.position.set(boards[i].x, 3.75, boards[i].z); scene.add(post);
     }
-
-    var lightSpots = [
-      { x: -200, z: -395, c: 0xff2a7a }, { x: 0, z: -395, c: 0x2ad4ff },
-      { x: 200, z: -395, c: 0xffd42a }, { x: -50, z: -350, c: 0xff2a7a },
-      { x: -480, z: 0, c: 0x2ad4ff }, { x: 50, z: -50, c: 0xffd42a }
-    ];
-    for (var l = 0; l < lightSpots.length; l++) {
-      var pl = new THREE.PointLight(lightSpots[l].c, 0.8, 70, 1.5);
-      pl.position.set(lightSpots[l].x, 10, lightSpots[l].z);
-      SB.world.scene.add(pl);
-      SB.world.neonLights.push(pl);
+    // --- palm (40) ---
+    var trunkGeo = new T.CylinderGeometry(0.18, 0.3, 6, 6);
+    var trunkMat = new T.MeshLambertMaterial({ color: 0x7a5a34 });
+    var frondGeo = new T.ConeGeometry(2.0, 1.6, 7);
+    var frondMat = new T.MeshLambertMaterial({ color: 0x3f8a3a });
+    function palm(x, z) {
+      var tr = new T.Mesh(trunkGeo, trunkMat); tr.position.set(x, 3, z); scene.add(tr);
+      var fr = new T.Mesh(frondGeo, frondMat);
+      fr.scale.y = 0.55; fr.position.set(x, 6.0, z); scene.add(fr);
     }
+    // avenue x=0: palm HANYA sisi barat (timur = sisi kamera, menutupi frame)
+    for (i = 0; i < 12; i++) palm(-11, -126 + i * 24);
+    for (i = 0; i < 4; i++) { palm(59, -120 + i * 72); palm(-59, -84 + i * 72); }
+    for (i = 0; i < 8; i++) palm(-178, -140 + i * 40);
+    // --- lampu jalan (12) ---
+    var poleGeo = new T.CylinderGeometry(0.12, 0.12, 6, 5);
+    var poleMat = new T.MeshLambertMaterial({ color: 0x2a2a33 });
+    var lampGeo2 = new T.SphereGeometry(0.35, 8, 6);
+    var lampMat2 = new T.MeshBasicMaterial({ color: 0xffe9a8 });
+    var lampSpots = [[-54, -54], [54, -54], [-54, 54], [54, 54], [-102, -6], [102, -6], [-6, -102], [6, 102], [-102, 102], [102, -102], [-10, 54], [10, -54]];
+    for (i = 0; i < lampSpots.length; i++) {
+      var pl = new T.Mesh(poleGeo, poleMat);
+      pl.position.set(lampSpots[i][0], 3, lampSpots[i][1]); scene.add(pl);
+      var lm = new T.Mesh(lampGeo2, lampMat2);
+      lm.position.set(lampSpots[i][0], 6.2, lampSpots[i][1]); scene.add(lm);
+    }
+    // --- market stalls Old Mercado + crates ---
+    var awnMat = new T.MeshLambertMaterial({ map: stripeTex('#d84f4f', '#f5f0e0') });
+    var crateMat = new T.MeshLambertMaterial({ color: 0x8a6a3a });
+    var stallSpots = [[-58, 80], [-56, 92], [-60, 100], [-57, 108]];
+    for (i = 0; i < stallSpots.length; i++) {
+      var st = new T.Mesh(new T.BoxGeometry(3, 2, 2),
+        new T.MeshLambertMaterial({ color: 0x6a4a2a }));
+      st.position.set(stallSpots[i][0], 1, stallSpots[i][1]); scene.add(st);
+      var aw = new T.Mesh(new T.PlaneGeometry(3.4, 2.4), awnMat);
+      aw.rotation.x = -Math.PI / 2; aw.rotation.z = 0.4;
+      aw.position.set(stallSpots[i][0], 2.3, stallSpots[i][1]); scene.add(aw);
+    }
+    for (i = 0; i < 8; i++) {
+      var cr = new T.Mesh(new T.BoxGeometry(1.2, 1.2, 1.2), crateMat);
+      cr.position.set(-58 + rng() * 10, 0.6, 76 + rng() * 30); scene.add(cr);
+    }
+    // --- mobil parkir (6, dekat bank) ---
+    var parkSpots = [[8, 30, 0], [8, 18, 0], [-8, 26, 0], [8, -14, 0], [-8, -22, 0], [56, 30, 1.57]];
+    var parkCols = [0xe8e8e8, 0x3a6ad8, 0xd8b13c, 0x7a7a80, 0x4fae6a, 0xc94f4f];
+    for (i = 0; i < parkSpots.length; i++) {
+      var pk = city.makeCar(parkCols[i]);
+      pk.position.set(parkSpots[i][0], 0, parkSpots[i][1]);
+      pk.rotation.y = parkSpots[i][2]; scene.add(pk);
+      city.parked.push(pk);
+    }
+    // --- traffic (29: 2 cruiser pengapit + 1 taxi + 2 truck + 24 mobil) ---
+    var carCols = [0xd84f6a, 0x4f9fd8, 0xe8c84f, 0x7ad06a, 0x9a6ad0, 0xe8e8e8, 0x333a44, 0xe88a5f, 0x4fae8a, 0xc94f4f];
+    for (i = 0; i < 29; i++) {
+      var axis = rng() < 0.5 ? 'x' : 'z';
+      var road = ROADS[Math.floor(rng() * 7)];
+      var dir = rng() < 0.5 ? 1 : -1;
+      var mesh, kind = 'car';
+      if (i === 0 || i === 1) { mesh = city.makeCar(0xf0f0f0, { cruiser: true }); kind = 'cruiser'; }
+      else if (i === 2) { mesh = city.makeCar(0xffc93c, { taxi: true }); kind = 'taxi'; }
+      else if (i === 3 || i === 4) { mesh = city.makeCar(0x8a8a84, { truck: true }); kind = 'truck'; }
+      else mesh = city.makeCar(carCols[Math.floor(rng() * carCols.length)]);
+      scene.add(mesh);
+      city.traffic.push({
+        mesh: mesh, axis: axis, fixed: road, along: -150 + rng() * 300, dir: dir,
+        lane: axis === 'x' ? (dir > 0 ? -3 : 3) : (dir > 0 ? 3 : -3),
+        speed: 28 + rng() * 27, kind: kind,
+        follow: kind === 'cruiser', off: i === 0 ? [-5, -6] : [5.5, -4], active: true
+      });
+    }
+    // --- pejalan kaki (28: 2 foot cop + 26 warga) ---
+    var shirts = [0xd84f6a, 0x4f9fd8, 0xe8c84f, 0x7ad06a, 0x9a6ad0, 0xe8e8e8, 0x333a44, 0xff8a3d];
+    for (i = 0; i < 28; i++) {
+      var pAxis = rng() < 0.5 ? 'x' : 'z';
+      var pRoad = ROADS[Math.floor(rng() * 7)];
+      var pDir = rng() < 0.5 ? 1 : -1;
+      var pm = city.makePerson(i < 2 ? 0x1e2f5e : shirts[Math.floor(rng() * shirts.length)], i < 2);
+      pm.userData.cop = i < 2;
+      pm.userData.boss = false;
+      scene.add(pm);
+      city.peds.push({
+        mesh: pm, axis: pAxis, fixed: pRoad + (rng() < 0.5 ? -8.5 : 8.5),
+        along: -148 + rng() * 296, dir: pDir,
+        speed: i >= 24 ? 3.5 + rng() : 1 + rng() * 1.2,
+        run: i >= 24, active: true, ph: rng() * 6.28
+      });
+    }
+    city.cops = [city.peds[0], city.peds[1]];
+    // --- heli GULL-1 + cone spotlight + lingkaran cahaya ---
+    var heli = new T.Group();
+    var hBody = new T.Mesh(new T.BoxGeometry(2.0, 1.3, 3.4),
+      new T.MeshLambertMaterial({ color: 0x2c3440 })); heli.add(hBody);
+    var hGlass = new T.Mesh(new T.BoxGeometry(1.7, 0.7, 0.8),
+      new T.MeshLambertMaterial({ color: 0x9fd8ef }));
+    hGlass.position.set(0, 0.2, -1.6); heli.add(hGlass);
+    var hTail = new T.Mesh(new T.BoxGeometry(0.5, 0.5, 3.2),
+      new T.MeshLambertMaterial({ color: 0x2c3440 }));
+    hTail.position.set(0, 0.2, 2.8); heli.add(hTail);
+    var hFin = new T.Mesh(new T.BoxGeometry(0.12, 1.2, 0.8),
+      new T.MeshLambertMaterial({ color: 0xd81f2a }));
+    hFin.position.set(0, 0.6, 4.2); heli.add(hFin);
+    var rotor = new T.Mesh(new T.BoxGeometry(7.5, 0.08, 0.5),
+      new T.MeshLambertMaterial({ color: 0x14141a }));
+    rotor.position.y = 0.85; heli.add(rotor);
+    city.heliRotor = rotor;
+    var hLabel = new T.Mesh(new T.PlaneGeometry(2.2, 0.55),
+      new T.MeshBasicMaterial({ map: textTex('GULL-1', '#ffffff', 'rgba(0,0,0,0.0)', 256, 64, 'bold 44px Arial'), transparent: true }));
+    hLabel.position.set(-1.02, 0.1, 0); hLabel.rotation.y = -Math.PI / 2; heli.add(hLabel);
+    var skidGeo = new T.BoxGeometry(0.12, 0.12, 2.6);
+    var skidMat = new T.MeshLambertMaterial({ color: 0x14141a });
+    var s1 = new T.Mesh(skidGeo, skidMat); s1.position.set(-0.8, -0.85, 0); heli.add(s1);
+    var s2 = new T.Mesh(skidGeo, skidMat); s2.position.set(0.8, -0.85, 0); heli.add(s2);
+    scene.add(heli);
+    city.heli = heli;
+    var coneGrp = new T.Group(); scene.add(coneGrp);
+    var cone = new T.Mesh(new T.ConeGeometry(9, 40, 20, 1, true),
+      new T.MeshBasicMaterial({ color: 0xfff2b0, transparent: true, opacity: 0.12, side: T.DoubleSide, depthWrite: false, blending: T.AdditiveBlending }));
+    cone.rotation.x = Math.PI / 2; cone.position.z = -20; coneGrp.add(cone);
+    city.coneGrp = coneGrp;
+    var spot = new T.Mesh(new T.CircleGeometry(7, 24),
+      new T.MeshBasicMaterial({ color: 0xfff2b0, transparent: true, opacity: 0.10, depthWrite: false, blending: T.AdditiveBlending }));
+    spot.rotation.x = -Math.PI / 2; spot.position.y = 0.12; scene.add(spot);
+    city.spot = spot;
+    // --- pool burst PERSISTEN (muzzle flash): 96 box + flash sprite + point light ---
+    city.burstPool = [];
+    var bGeo = new T.BoxGeometry(0.16, 0.16, 0.16);
+    for (i = 0; i < 96; i++) {
+      var bm = new T.Mesh(bGeo, new T.MeshBasicMaterial({ color: 0xffc860 }));
+      bm.visible = false; scene.add(bm);
+      city.burstPool.push({ mesh: bm, vx: 0, vy: 0, vz: 0, life: 0, on: false });
+    }
+    var flashC = document.createElement('canvas'); flashC.width = 64; flashC.height = 64;
+    var fg2 = flashC.getContext('2d');
+    var fgr = fg2.createRadialGradient(32, 32, 2, 32, 32, 30);
+    fgr.addColorStop(0, 'rgba(255,240,180,1)'); fgr.addColorStop(0.5, 'rgba(255,180,60,0.7)');
+    fgr.addColorStop(1, 'rgba(255,140,20,0)');
+    fg2.fillStyle = fgr; fg2.fillRect(0, 0, 64, 64);
+    city.flash = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(flashC), color: 0xffe9a8, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending }));
+    city.flash.visible = false; scene.add(city.flash);
+    city.flashLight = new T.PointLight(0xffc860, 0, 22, 1.5);
+    scene.add(city.flashLight);
+    city._burstCount = 0; city._burstLife = 0;
+    // --- hero: mobil pink + karakter on-foot ---
+    city.heroCar = city.makeCar(0xff4fa3);
+    var shadow = new T.Mesh(new T.CircleGeometry(2.2, 20),
+      new T.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
+    shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.04;
+    city.heroCar.add(shadow);
+    scene.add(city.heroCar);
+    city.heroChar = city.makePerson(0xff4fa3, false);
+    var gun = new T.Mesh(new T.BoxGeometry(0.12, 0.12, 0.5),
+      new T.MeshLambertMaterial({ color: 0x14141a }));
+    gun.position.set(0.4, 1.15, -0.3); city.heroChar.add(gun);
+    scene.add(city.heroChar);
+    city.setDensity(24, 20);
   };
 
-  city.buildStreetProps = function () {
-
-    var spots = [];
-    for (var x = -400; x <= 400; x += 100) {
-      for (var z = -400; z <= 400; z += 50) spots.push([x + 11, z]);
+  // --- burst: hanya toggle visible/posisi (pool sudah di scene sejak attach) ---
+  city.burst = function (x, y, z, o) {
+    o = o || {};
+    var n = o.n || 24, col = o.color || 0xffc860;
+    var br = SB.engine.rng(9000 + city._burstCount * 7919);
+    city._burstCount++;
+    var placed = 0;
+    for (var i = 0; i < city.burstPool.length && placed < n; i++) {
+      var p = city.burstPool[i];
+      if (p.on) continue;
+      p.on = true; p.life = 0.32;
+      p.mesh.visible = true;
+      p.mesh.material.color.setHex(col);
+      p.mesh.position.set(x, y, z);
+      var a = br() * 6.283, e = (br() - 0.3) * 1.2, sp = 3 + br() * 7;
+      p.vx = Math.cos(a) * Math.cos(e) * sp;
+      p.vy = Math.sin(e) * sp + 2;
+      p.vz = Math.sin(a) * Math.cos(e) * sp;
+      placed++;
     }
-    var poles = new THREE.InstancedMesh(GEO.lampPole, M.lampPole, spots.length);
-    var headGeo = new THREE.BoxGeometry(0.5, 0.18, 0.18);
-    var heads = new THREE.InstancedMesh(headGeo, M.lampHead, spots.length);
-    var m4 = new THREE.Matrix4();
-    for (var i = 0; i < spots.length; i++) {
-      m4.makeTranslation(spots[i][0], 2.75, spots[i][1]);
-      poles.setMatrixAt(i, m4);
-      m4.makeTranslation(spots[i][0], 5.6, spots[i][1]);
-      heads.setMatrixAt(i, m4);
-    }
-    SB.world.groups.props.add(poles);
-    SB.world.groups.props.add(heads);
+    city.flash.position.set(x, y, z);
+    city.flash.scale.set(o.flash || 4.5, o.flash || 4.5, 1);
+    city.flash.visible = true;
+    city.flashLight.position.set(x, y, z);
+    city.flashLight.intensity = 2.4;
+    city._burstLife = 0.32;
   };
 
-  var skyItems = null;
-  city.buildSky = function () {
-    var g = SB.world.groups.sky;
-    var sunDisc = new THREE.Mesh(GEO.sunDisc, new THREE.MeshBasicMaterial({ color: 0xffd27a, fog: false }));
-    sunDisc.position.set(-750, 170, 250);
-    sunDisc.lookAt(0, 60, 0);
-    g.add(sunDisc);
-    var moon = new THREE.Mesh(new THREE.CircleGeometry(26, 24), new THREE.MeshBasicMaterial({ color: 0xdfe8ff, fog: false }));
-    moon.position.set(500, 320, -250);
-    moon.lookAt(0, 60, 0);
-    moon.visible = false;
-    g.add(moon);
-
-    skyItems = { sunDisc: sunDisc, moon: moon, clouds: [] };
-    for (var i = 0; i < 8; i++) {
-      var cloud = new THREE.Group();
-      for (var p = 0; p < 3; p++) {
-        var puff = new THREE.Mesh(GEO.cloudPuff,
-          new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, fog: false }));
-        puff.scale.set(SB.rand(18, 34), SB.rand(5, 8), SB.rand(10, 16));
-        puff.position.set(p * SB.rand(14, 22) - 20, SB.rand(-2, 2), SB.rand(-6, 6));
-        cloud.add(puff);
+  city.setDensity = function (cars, peds) {
+    for (var i = 0; i < city.traffic.length; i++) {
+      var c = city.traffic[i];
+      c.active = i < cars;
+      c.mesh.visible = c.active;
+      if (c.follow && SB.state.mode === 'foot') { // on-foot: cruiser parkir dekat plaza
+        c.mesh.visible = true; c.active = true;
+        c.mesh.position.set(i === 0 ? -58 : -70, 0, i === 0 ? 78 : 92);
+        c.mesh.rotation.y = i === 0 ? 0.7 : -0.5;
       }
-      var cx = SB.rand(-500, 500), cz = SB.rand(-500, 500), cy = SB.rand(180, 260);
-      cloud.position.set(cx, cy, cz);
-      cloud.userData = { baseX: cx, speed: SB.rand(1.5, 3.5) };
-      g.add(cloud);
-      skyItems.clouds.push(cloud);
     }
-    SB.on('time-of-day', function (mode) {
-      if (!skyItems) return;
-      skyItems.sunDisc.visible = (mode !== 'night');
-      skyItems.moon.visible = (mode === 'night');
-    });
-  };
-
-  function updateSky(dt) {
-    if (!skyItems) return;
-    var t = SB.state.simTime;
-    for (var i = 0; i < skyItems.clouds.length; i++) {
-      var c = skyItems.clouds[i];
-      var nx = c.userData.baseX + ((t * c.userData.speed) % 1100) - 550;
-      c.position.x = nx;
+    for (var j = 0; j < city.peds.length; j++) {
+      var p = city.peds[j];
+      p.active = j < peds;
+      p.mesh.visible = p.active;
     }
-  }
-
-  var CAR_KINDS = {
-    sport: { w: 1.9, h: 0.65, l: 4.4, cabinH: 0.5 },
-    muscle: { w: 2.0, h: 0.75, l: 4.6, cabinH: 0.55 },
-    sedan: { w: 1.9, h: 0.7, l: 4.4, cabinH: 0.55 },
-    taxi: { w: 1.9, h: 0.7, l: 4.4, cabinH: 0.55 },
-    truck: { w: 2.2, h: 1.2, l: 5.5, cabinH: 0.9 },
-    van: { w: 2.0, h: 1.6, l: 4.8, cabinH: 0.7 }
-  };
-
-  city.makeCarMesh = function (kind, colorHex) {
-    buildMaterials();
-    var spec = CAR_KINDS[kind] || CAR_KINDS.sedan;
-    var group = new THREE.Group();
-    var bodyMat = new THREE.MeshLambertMaterial({ color: colorHex });
-    var body = new THREE.Mesh(GEO.box, bodyMat);
-    body.scale.set(spec.w, spec.h, spec.l);
-    body.position.y = 0.55;
-    body.castShadow = true;
-    group.add(body);
-    var cabin = new THREE.Mesh(GEO.box, M.glass);
-    cabin.scale.set(spec.w - 0.25, spec.cabinH, spec.l * 0.5);
-    cabin.position.set(0, 0.55 + spec.h / 2 + spec.cabinH / 2 - 0.05, -spec.l * 0.06);
-    cabin.castShadow = true;
-    group.add(cabin);
-    var wheelPos = [
-      [-spec.w / 2, 0.35, spec.l * 0.32], [spec.w / 2, 0.35, spec.l * 0.32],
-      [-spec.w / 2, 0.35, -spec.l * 0.32], [spec.w / 2, 0.35, -spec.l * 0.32]
-    ];
-    for (var i = 0; i < 4; i++) {
-      var wheel = new THREE.Mesh(GEO.wheel, M.tire);
-      wheel.rotation.z = Math.PI / 2;
-      wheel.position.set(wheelPos[i][0], wheelPos[i][1], wheelPos[i][2]);
-      wheel.castShadow = true;
-      group.add(wheel);
+    // on-foot: 2 foot cop dekat hero, sebagian peds lari
+    if (SB.state.mode === 'foot' && SB.engine.hero) {
+      var hr = SB.engine.hero;
+      var o0 = SB.engine.rotXZ(hr.heading, 3, -4), o1 = SB.engine.rotXZ(hr.heading, -4, -6);
+      city.cops[0].mesh.position.set(hr.pos.x + o0[0], 0, hr.pos.z + o0[1]);
+      city.cops[0].along = hr.pos.z + o0[1]; city.cops[0].fixed = hr.pos.x + o0[0];
+      city.cops[1].mesh.position.set(hr.pos.x + o1[0], 0, hr.pos.z + o1[1]);
+      city.cops[1].along = hr.pos.z + o1[1]; city.cops[1].fixed = hr.pos.x + o1[0];
+      for (var k = 2; k < city.peds.length; k++) city.peds[k].run = k % 3 === 0;
     }
-    var hl = new THREE.Mesh(GEO.box, M.headlight);
-    hl.scale.set(0.4, 0.15, 0.1);
-    hl.position.set(-spec.w / 2 + 0.35, 0.6, -spec.l / 2 - 0.03);
-    group.add(hl);
-    var hr = hl.clone(); hr.position.x = spec.w / 2 - 0.35; group.add(hr);
-    var tl = new THREE.Mesh(GEO.box, M.taillight);
-    tl.scale.set(0.4, 0.15, 0.1);
-    tl.position.set(-spec.w / 2 + 0.35, 0.6, spec.l / 2 + 0.03);
-    group.add(tl);
-    var tr = tl.clone(); tr.position.x = spec.w / 2 - 0.35; group.add(tr);
-    if (kind === 'taxi') {
-      var sign = new THREE.Mesh(GEO.box, M.neonYellow);
-      sign.scale.set(0.8, 0.25, 0.4);
-      sign.position.set(0, 1.45, 0);
-      group.add(sign);
-    }
-    return group;
-  };
-
-  city.makePedMesh = function (shirtHex, skinHex) {
-    buildMaterials();
-    var group = new THREE.Group();
-    var shirt = new THREE.MeshLambertMaterial({ color: shirtHex });
-    var skin = new THREE.MeshLambertMaterial({ color: skinHex });
-    var legs = new THREE.Mesh(GEO.box, new THREE.MeshLambertMaterial({ color: 0x2a2a3a }));
-    legs.scale.set(0.4, 0.5, 0.28); legs.position.y = 0.25;
-    legs.castShadow = true;
-    group.add(legs);
-    var torso = new THREE.Mesh(GEO.box, shirt);
-    torso.scale.set(0.46, 0.6, 0.3); torso.position.y = 0.8;
-    torso.castShadow = true;
-    group.add(torso);
-    var head = new THREE.Mesh(GEO.pedHead, skin);
-    head.position.y = 1.35;
-    head.castShadow = true;
-    group.add(head);
-    return group;
-  };
-
-  city.buildTraffic = function (count) {
-    count = count || 22;
-    var kinds = ['sport', 'muscle', 'sedan', 'taxi', 'truck', 'van'];
-    SB.world.traffic = [];
-    for (var i = 0; i < count; i++) {
-      var road = SB.pick(ROADS);
-      var dir = SB.chance(0.5) ? 1 : -1;
-      var lane = road.axis === 'x' ? (dir > 0 ? 3.5 : -3.5) : (dir > 0 ? -3.5 : 3.5);
-      var kind = SB.pick(kinds);
-      var color = SB.pick(M.carColors).color.getHex();
-      var mesh = city.makeCarMesh(kind, color);
-      var s = SB.rand(road.from + 20, road.to - 20);
-      mesh.position.set(road.axis === 'x' ? s : road.at + lane, 0, road.axis === 'x' ? road.at + lane : s);
-      mesh.rotation.y = road.axis === 'x' ? (dir > 0 ? -Math.PI / 2 : Math.PI / 2) : (dir > 0 ? Math.PI : 0);
-      SB.world.groups.traffic.add(mesh);
-      SB.world.traffic.push({
-        group: mesh, road: road, lane: lane, dir: dir,
-        speed: SB.rand(8, 14), kind: kind, color: color, s: s
-      });
+    // mode mobil: 3 traffic + 6 peds di-staging di depan hero, di avenue x=0.
+    // Traffic melaju secepat hero (offset konstan selama advanceSim berapa pun).
+    if (SB.state.mode === 'car' && SB.engine.hero) {
+      var hr2 = SB.engine.hero, kmh = SB.state.speedKmh || 40;
+      var offs = [-28, -38, -48];
+      for (var s = 0; s < 3; s++) {
+        var tc = city.traffic[5 + s];
+        if (!tc) continue;
+        tc.axis = 'x'; tc.fixed = 0; tc.dir = -1;
+        tc.lane = (s % 2 ? 3 : -3); tc.along = hr2.pos.z + offs[s];
+        tc.speed = kmh; tc.follow = false; tc.active = true; tc.mesh.visible = true;
+      }
+      var poffs = [-12, -18, -24, -30, -36, -42];
+      for (var q2 = 0; q2 < 6; q2++) {
+        var pp = city.peds[2 + q2];
+        if (!pp) continue;
+        pp.axis = 'x'; pp.fixed = (q2 % 2 ? 8.5 : -8.5);
+        pp.along = hr2.pos.z + poffs[q2]; pp.dir = -1;
+        pp.active = true; pp.mesh.visible = true;
+      }
     }
   };
 
-  function updateTraffic(dt) {
-    var list = SB.world.traffic;
-    for (var i = 0; i < list.length; i++) {
-      var c = list[i];
-      c.s += c.dir * c.speed * dt;
-      if (c.s > c.road.to + 20) c.s = c.road.from - 20;
-      if (c.s < c.road.from - 20) c.s = c.road.to + 20;
-      if (c.road.axis === 'x') c.group.position.set(c.s, 0, c.road.at + c.lane);
-      else c.group.position.set(c.road.at + c.lane, 0, c.s);
-    }
-  }
-  city.updateTraffic = updateTraffic;
-
-  city.buildPeds = function (count) {
-    count = count || 36;
-    SB.world.peds = [];
-    for (var i = 0; i < count; i++) {
-      var road = SB.pick(ROADS);
-      var dir = SB.chance(0.5) ? 1 : -1;
-      var side = SB.chance(0.5) ? 9 : -9;
-      var s = SB.rand(road.from + 20, road.to - 20);
-      var shirt = SB.pick(M.shirtColors).color.getHex();
-      var skin = SB.pick(M.skinTones).color.getHex();
-      var mesh = city.makePedMesh(shirt, skin);
-      mesh.position.set(road.axis === 'x' ? s : road.at + side, 0, road.axis === 'x' ? road.at + side : s);
-      mesh.rotation.y = road.axis === 'x' ? (dir > 0 ? -Math.PI / 2 : Math.PI / 2) : (dir > 0 ? Math.PI : 0);
-      SB.world.groups.peds.add(mesh);
-      SB.world.peds.push({
-        group: mesh, road: road, side: side, dir: dir,
-        speed: SB.rand(1.0, 1.6), s: s, phase: SB.rand(0, Math.PI * 2),
-        pause: 0, rng: SB.mulberry32(SB.state.seed * 1000 + i + 7)
-      });
-    }
+  city.setHeli = function (on, hero) {
+    city.heli.visible = !!on;
+    city.coneGrp.visible = !!on;
+    city.spot.visible = !!on;
+    city._heliOn = !!on;
   };
 
-  function updatePeds(dt) {
-    var list = SB.world.peds;
-    var t = SB.state.simTime;
-    for (var i = 0; i < list.length; i++) {
-      var p = list[i];
-      if (p.pause > 0) { p.pause -= dt; continue; }
-      if (p.rng() < 0.0015) { p.pause = p.rng() * 3; continue; }
-      p.s += p.dir * p.speed * dt;
-      if (p.s > p.road.to - 10) { p.s = p.road.to - 10; p.dir = -1; }
-      if (p.s < p.road.from + 10) { p.s = p.road.from + 10; p.dir = 1; }
-      if (p.road.axis === 'x') {
-        p.group.position.set(p.s, Math.abs(Math.sin(t * 8 + p.phase)) * 0.06, p.road.at + p.side);
-        p.group.rotation.y = p.dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+  city.placeHero = function (hero) {
+    if (!city.heroCar) return;
+    city.heroCar.visible = hero.mode === 'car';
+    city.heroChar.visible = hero.mode === 'foot';
+    var m = hero.mode === 'car' ? city.heroCar : city.heroChar;
+    m.position.set(hero.pos.x, 0, hero.pos.z);
+    m.rotation.y = hero.heading;
+  };
+
+  // titik di jalan? (dipakai B2: spawn / validasi posisi)
+  city.roadAt = function (x, z) {
+    for (var i = 0; i < ROADS.length; i++)
+      if (Math.abs(x - ROADS[i]) < 7 || Math.abs(z - ROADS[i]) < 7) return true;
+    return false;
+  };
+  city.groundY = function () { return 0; };
+
+  // --- update per frame ---
+  city.update = function (dt, t) {
+    var i, hr = SB.engine.hero;
+    for (i = 0; i < city.traffic.length; i++) {
+      var c = city.traffic[i];
+      if (!c.active || !c.mesh.visible) continue;
+      if (c.follow && hr && hr.mode === 'car') {
+        var o = SB.engine.rotXZ(hr.heading, c.off[0], c.off[1]);
+        c.mesh.position.set(hr.pos.x + o[0], 0, hr.pos.z + o[1]);
+        c.mesh.rotation.y = hr.heading;
+        continue;
+      }
+      if (c.follow) continue; // parkir (mode foot) — diam
+      c.along += c.dir * c.speed / 3.6 * dt;
+      if (c.along > 152) c.along = -152;
+      if (c.along < -152) c.along = 152;
+      if (c.axis === 'x') {
+        c.mesh.position.set(c.fixed + c.lane, 0, c.along);
+        c.mesh.rotation.y = c.dir > 0 ? Math.PI : 0;
       } else {
-        p.group.position.set(p.road.at + p.side, Math.abs(Math.sin(t * 8 + p.phase)) * 0.06, p.s);
-        p.group.rotation.y = p.dir > 0 ? Math.PI : 0;
+        c.mesh.position.set(c.along, 0, c.fixed + c.lane);
+        c.mesh.rotation.y = c.dir > 0 ? -Math.PI / 2 : Math.PI / 2;
       }
     }
-  }
-  city.updatePeds = updatePeds;
-
-  city.buildCity = function (seed) {
-    if (typeof THREE === 'undefined') throw new Error('SB.city.buildCity: THREE not loaded');
-    if (!SB.world.scene) throw new Error('SB.city.buildCity: call SB.init() first');
-    if (seed !== undefined) SB.reseed(seed);
-    buildMaterials();
-
-    var old = SB.world.groups.city;
-    if (old) SB.world.scene.remove(old);
-    var groups = {
-      city: new THREE.Group(),
-      buildings: new THREE.Group(),
-      roads: new THREE.Group(),
-      props: new THREE.Group(),
-      traffic: new THREE.Group(),
-      peds: new THREE.Group(),
-      sky: new THREE.Group()
-    };
-    groups.city.add(groups.buildings);
-    groups.city.add(groups.roads);
-    groups.city.add(groups.props);
-    groups.city.add(groups.traffic);
-    groups.city.add(groups.peds);
-    groups.city.add(groups.sky);
-    SB.world.groups = groups;
-    SB.world.scene.add(groups.city);
-
-    SB.world.colliders = [];
-    SB.world.roads = ROADS;
-    SB.world.districts = DISTRICTS;
-    SB.world.landmarks = LANDMARKS;
-    SB.world.spawns = SPAWNS;
-    SB.world.bounds = { minX: WORLD.minX, maxX: WORLD.maxX, minZ: WORLD.minZ, maxZ: WORLD.maxZ };
-    SB.world.neonLights = [];
-
-    city.buildGround();
-    city.buildOcean();
-    city.buildRoads();
-    city.buildSidewalks();
-    city.buildBeach();
-    city.buildMarina();
-    city.buildPark();
-    city.buildBuildings();
-    city.buildLandmarks();
-    city.buildPalms();
-    city.buildNeon();
-    city.buildStreetProps();
-    city.buildSky();
-    city.buildTraffic(30);
-    city.buildPeds(48);
-
-    SB.registerUpdate(updateTraffic);
-    SB.registerUpdate(updatePeds);
-    SB.registerUpdate(updateSky);
-    SB.emit('city-built');
-    return SB.world;
+    for (i = 0; i < city.peds.length; i++) {
+      var p = city.peds[i];
+      if (!p.active || !p.mesh.visible) continue;
+      var sp = p.run ? p.speed * 2.2 : p.speed;
+      p.along += p.dir * sp * dt;
+      if (p.along > 148) p.along = -148;
+      if (p.along < -148) p.along = 148;
+      if (p.axis === 'x') {
+        p.mesh.position.set(p.fixed, Math.abs(Math.sin(t * 6 + p.ph)) * 0.06, p.along);
+        p.mesh.rotation.y = p.dir > 0 ? Math.PI : 0;
+      } else {
+        p.mesh.position.set(p.along, Math.abs(Math.sin(t * 6 + p.ph)) * 0.06, p.fixed);
+        p.mesh.rotation.y = p.dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+      }
+    }
+    if (city._heliOn && hr) {
+      var ho = SB.engine.rotXZ(hr.heading, 6, -38);
+      var hx = hr.pos.x + ho[0], hz = hr.pos.z + ho[1], hy = 16 + Math.sin(t * 0.8) * 0.8;
+      city.heli.position.set(hx, hy, hz);
+      city.heliRotor.rotation.y = t * 22;
+      var to = SB.engine.rotXZ(hr.heading, 4, -4);
+      var tx = hr.pos.x + to[0], tz = hr.pos.z + to[1];
+      city.coneGrp.position.set(hx, hy, hz);
+      city.coneGrp.lookAt(tx, 0, tz);
+      city.spot.position.set(tx, 0.12, tz);
+    }
+    if (city.seaTex) {
+      city.seaTex.offset.x = (t * 0.008) % 1;
+      city.seaTex.offset.y = (t * 0.005) % 1;
+    }
+    // decay burst
+    if (city._burstLife > 0) {
+      city._burstLife -= dt;
+      var f = Math.max(0, city._burstLife / 0.32);
+      city.flash.material.opacity = f;
+      city.flashLight.intensity = 2.4 * f;
+      if (city._burstLife <= 0) { city.flash.visible = false; city.flashLight.intensity = 0; }
+    }
+    for (i = 0; i < city.burstPool.length; i++) {
+      var b = city.burstPool[i];
+      if (!b.on) continue;
+      b.life -= dt;
+      if (b.life <= 0) { b.on = false; b.mesh.visible = false; continue; }
+      b.vy -= 14 * dt;
+      b.mesh.position.x += b.vx * dt;
+      b.mesh.position.y += b.vy * dt;
+      b.mesh.position.z += b.vz * dt;
+      var s = Math.max(0.05, b.life / 0.32);
+      b.mesh.scale.set(s, s, s);
+    }
   };
-
-  city.colliders = SB.world.colliders;
-
 })();

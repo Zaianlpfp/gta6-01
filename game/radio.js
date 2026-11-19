@@ -1,44 +1,45 @@
+// Solmar Bay — radio (B4, v4-rebuild r4). 3 stations, deterministic track lists.
+// Switching station always changes the playing track (track resets to that station's first).
 (function () {
-  'use strict';
   var SB = window.SB = window.SB || {};
-  var S = SB.state;
   var STATIONS = [
-    { name: 'WAVE 88.1', genre: 'SUNSET SYNTH', bpm: 96, wave: 'sawtooth', root: 45,
-      tracks: ['Neon Drive — Pink Horizon', 'Palm Static — Coral Ghosts', 'Midnight Causeway — Lumen Kids'] },
-    { name: 'RADIO SOL 101.9', genre: 'LATIN POP', bpm: 104, wave: 'triangle', root: 50,
-      tracks: ['Sol de Medianoche — Marisol', 'Calle Ocho — Los Palmeros', 'Baila Solmar — Luna Rey'] },
-    { name: 'FLAMINGO FM 88.1', genre: 'FUNK / DISCO', bpm: 116, wave: 'square', root: 41,
-      tracks: ['Disco Bay — The Flamingos', 'Night Swim — Velvet Tide', 'Pink Cadillac — The Flamingos'] }
+    { name: 'WAVE 88.1', genre: 'SYNTHWAVE', tracks: ['Midnight Drive - Neon Palms', 'Sunset Strip - Vector Hold', 'Chrome Hearts - Laserhawk Nights', 'Palm Static - FM-84'] },
+    { name: 'SOLMAR FM 101.5', genre: 'LATIN FUNK', tracks: ['Calle Ocho - Marisol Vega', 'Bayside Groove - Los Corales', 'Salsa Neon - DJ Palma', 'Marina Lights - Tito Bravo'] },
+    { name: 'REBEL 99.9', genre: 'ROCK', tracks: ['Gasoline Heart - The Vultures', 'Highway Static - Iron Mercy', 'Night Run - Blacktop Saints', 'Full Throttle - Redline Choir'] }
   ];
-  var trackIdx = 0;
-  function apply() {
-    var st = STATIONS[S.radio.station];
-    S.radio.name = st.name;
-    S.radio.track = st.tracks[trackIdx % st.tracks.length];
-    if (SB.audio && SB.audio.setStation) SB.audio.setStation(S.radio.station);
-    if (SB.hud && SB.hud.toast) SB.hud.toast('♪ ' + st.name + ' · ' + S.radio.track);
-  }
+  var station = 0, trackIdx = 0;
+
+  function blip() { try { if (SB.audio && SB.audio.station) SB.audio.station(); } catch (e) {} }
+  function toast(msg) { try { if (SB.hud && SB.hud.toast) SB.hud.toast(msg); } catch (e) {} }
+
   SB.radio = {
-    STATIONS: STATIONS,
-    play: function (i) {
-      i = ((Math.round(i) || 0) % STATIONS.length + STATIONS.length) % STATIONS.length;
-      S.radio.station = i; trackIdx = 0; S.radio.playing = true; apply();
+    version: '4.0.0-r4',
+    stations: STATIONS,
+    stationIndex: function () { return station; },
+    trackIndex: function () { return trackIdx; },
+    stationName: function () { return STATIONS[station].name; },
+    genre: function () { return STATIONS[station].genre; },
+    track: function () { return STATIONS[station].tracks[trackIdx]; },
+    nowPlaying: function () {
+      return { station: STATIONS[station].name, genre: STATIONS[station].genre, track: STATIONS[station].tracks[trackIdx] };
     },
-    next: function () { SB.radio.play(S.radio.station + 1); },
-    prev: function () { SB.radio.play(S.radio.station - 1); },
-    nextTrack: function () { trackIdx++; apply(); },
-    prevTrack: function () { trackIdx = Math.max(0, trackIdx - 1); apply(); },
-    toggle: function () {
-      S.radio.playing = !S.radio.playing;
-      if (SB.audio && SB.audio.setPlaying) SB.audio.setPlaying(S.radio.playing);
-      else if (S.radio.playing) SB.radio.play(S.radio.station);
+    line: function () {
+      var np = this.nowPlaying();
+      return np.station + ' - ' + np.track;
     },
-    current: function () { return { station: S.radio.station, name: S.radio.name, track: S.radio.track, playing: S.radio.playing }; },
-    stationDef: function (i) { return STATIONS[i || 0]; }
+    setStation: function (i) {
+      var n = STATIONS.length;
+      var idx = ((i % n) + n) % n;
+      if (idx === station && trackIdx === 0) return this.nowPlaying();
+      station = idx; trackIdx = 0; // new station => new track, always
+      blip(); toast('RADIO: ' + STATIONS[station].name);
+      return this.nowPlaying();
+    },
+    nextStation: function () { return this.setStation(station + 1); },
+    prevStation: function () { return this.setStation(station - 1); },
+    nextTrack: function () {
+      trackIdx = (trackIdx + 1) % STATIONS[station].tracks.length;
+      blip(); return this.nowPlaying();
+    }
   };
-  window.addEventListener('keydown', function (e) {
-    if (!S.started || S.paused) return;
-    if (e.code === 'KeyQ') SB.radio.next();
-    else if (e.code === 'KeyR') SB.radio.prev();
-  });
 })();

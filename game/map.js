@@ -1,154 +1,221 @@
+// Solmar Bay — full map screen (B4, v4-rebuild r4). Canvas fills the overlay
+// edge-to-edge (no black bars): non-uniform world fit at zoom 1, hero-centred zoom.
+// District labels drawn LAST with a black outline so they never clip.
 (function () {
-  'use strict';
   var SB = window.SB = window.SB || {};
-  var S = SB.state, W = SB.world;
-  var JOBS_FALLBACK = [
-    { id: 'first-fare', title: 'FIRST FARE', contact: 'MARA SOLIS', payout: 500, spot: 'hotel' },
-    { id: 'the-package', title: 'THE PACKAGE', contact: 'MARA SOLIS', payout: 1200, spot: 'marina' },
-    { id: 'hot-wheels', title: 'HOT WHEELS', contact: 'MARA SOLIS', payout: 1800, spot: 'garage' },
-    { id: 'night-run', title: 'NIGHT RUN', contact: 'MARA SOLIS', payout: 2500, spot: 'neon' },
-    { id: 'chop-shop', title: 'CHOP SHOP', contact: 'MARA SOLIS', payout: 3200, spot: 'garage' },
-    { id: 'harbor-lights', title: 'HARBOR LIGHTS', contact: 'MARA SOLIS', payout: 3200, spot: 'marina' },
-    { id: 'heat', title: 'HEAT', contact: 'MARA SOLIS', payout: 4200, spot: 'police' },
-    { id: 'big-score', title: 'THE BIG SCORE', contact: 'MARA SOLIS', payout: 5000, spot: 'bank' }
-  ];
-  var LEGEND = [
-    ['★', '#ffd23f', 'Story contact'], ['◆', '#ffe14d', 'Job objective'], ['⌂', '#39d353', 'Safehouse'],
-    ['✚', '#ff5a5a', 'Hospital'], ['⚑', '#4d9fff', 'Police'], ['$', '#b57edc', 'Weapons shop'],
-    ['✦', '#ff2a7a', 'Respray'], ['🏁', '#ffffff', 'Street race'], ['♦', '#ffd23f', 'Property'],
-    ['◉', '#ff9f1c', 'Sunset tape']
-  ];
-  var ICONS = { bank: '＄', hospital: '✚', police: '⚑', hotel: 'H', garage: '⚙', safehouse: '⌂', respray: '✦', shop: '$', club: '♪' };
-  var root = null, cv = null, ctx = null, visible = false;
-  var MX0 = -560, MZ0 = -470, MX1 = 470, MZ1 = 530;
-  function px(x) { return (x - MX0) / (MX1 - MX0) * cv.width; }
-  function py(z) { return (z - MZ0) / (MZ1 - MZ0) * cv.height; }
-  function jobs() {
-    if (SB.missions && SB.missions.JOBS && SB.missions.JOBS.length) return SB.missions.JOBS;
-    return JOBS_FALLBACK;
+  var open = false, el = null, cv = null, ctx2d = null, zoom = 1, pausedBefore = false;
+  var ZOOMS = [1, 1.6, 2.5, 4];
+  var WORLD = 170; // city x,z in +/-170
+  var ROAD_COLOR = '#2e3d46', SEA = '#0e3a4d', LAND = '#12242c', GRID = '#1b2f38';
+
+  function heroXY() {
+    var x = 0, z = 0, h = 0;
+    try {
+      var hp = SB.engine && SB.engine.heroPos ? SB.engine.heroPos() : null;
+      if (hp) { x = hp.x; z = hp.z; }
+      var eh = SB.engine && SB.engine.hero;
+      if (eh) h = eh.heading || 0;
+    } catch (e) {}
+    return { x: x, z: z, heading: h };
   }
-  var JOB_SPOT = { 'first-fare': 'hotel', 'the-package': 'marina', 'hot-wheels': 'garage', 'night-run': 'neon', 'chop-shop': 'garage', 'harbor-lights': 'marina', 'heat': 'police', 'big-score': 'bank' };
-  function missionTarget() {
-    if (SB.missions && SB.missions.active) {
-      var a = SB.missions.active();
-      var sm = SB.state.mission;
-      if (a && sm && sm.id === a.id && a.stages[sm.stage - 1] && a.stages[sm.stage - 1].target) return a.stages[sm.stage - 1].target;
-      if (a) { var j = jobs(); for (var i = 0; i < j.length; i++) { var sp = j[i].spot || JOB_SPOT[j[i].id]; if (j[i].id === a.id && sp && W.spawns.missions[sp]) return W.spawns.missions[sp]; } }
-    }
-    if (S.mission) { var js = jobs(); for (var k = 0; k < js.length; k++) { var sp2 = js[k].spot || JOB_SPOT[js[k].id]; if (js[k].id === S.mission.id && sp2 && W.spawns.missions[sp2]) return W.spawns.missions[sp2]; } }
+  function bossXY() {
+    try {
+      var b = SB.missions && SB.missions.boss;
+      if (b && b.position) return { x: b.position.x, z: b.position.z, on: true };
+      var bs = (SB.police && SB.police.bosses) || [];
+      if (bs.length && bs[0] && bs[0].position) return { x: bs[0].position.x, z: bs[0].position.z, on: true };
+      var m = SB.missions && SB.missions.marker;
+      if (m && m.on && m.label === 'SALTJACK') return { x: m.x, z: m.z, on: true };
+    } catch (e) {}
+    return { x: 0, z: 0, on: false };
+  }
+  function objMarker() {
+    try { var m = SB.missions && SB.missions.marker; if (m && m.on) return m; } catch (e) {}
     return null;
   }
-  function distTo(t) {
-    var p = W.player && W.player.pos;
-    if (!p || !t) return null;
-    return Math.round(Math.sqrt((t.x - p.x) * (t.x - p.x) + (t.z - p.z) * (t.z - p.z)));
-  }
-  function drawMap() {
-    if (!ctx) return;
-    var w = cv.width, h = cv.height;
-    ctx.fillStyle = '#0d1a2e'; ctx.fillRect(0, 0, w, h);
-    var ds = W.districts || [];
+  function draw() {
+    if (!cv || !ctx2d) return;
+    var W = cv.width, H = cv.height, c = ctx2d;
+    c.fillStyle = LAND; c.fillRect(0, 0, W, H); // full-bleed base, never black
+    var sx = W / (WORLD * 2) * zoom, sy = H / (WORLD * 2) * zoom;
+    var cx = W / 2, cy = H / 2;
+    var hx = heroXY().x, hz = heroXY().z;
+    var X = function (x) { return zoom > 1 ? cx + (x - hx) * sx : cx + x * sx; };
+    var Z = function (z) { return zoom > 1 ? cy + (z - hz) * sy : cy + z * sy; };
+    // sea west of x=-144, beach strip
+    c.fillStyle = SEA; c.fillRect(0, 0, Math.max(0, X(-144)), H);
+    c.fillStyle = '#c9a86a'; c.fillRect(Math.max(0, X(-158)), 0, Math.max(0, X(-144) - X(-158)), H);
+    // districts
+    var ds = [];
+    try { ds = (SB.city && SB.city.districts) || []; } catch (e) {}
     for (var i = 0; i < ds.length; i++) {
       var d = ds[i];
-      ctx.fillStyle = '#' + ('000000' + (d.tint || 0x223344).toString(16)).slice(-6);
-      ctx.globalAlpha = 0.55;
-      ctx.fillRect(px(d.x0), py(d.z0), px(d.x1) - px(d.x0), py(d.z1) - py(d.z0));
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 13px Arial'; ctx.textAlign = 'left';
-      ctx.fillText(d.name.toUpperCase(), px(d.x0) + 6, py(d.z0) + 18);
+      c.fillStyle = '#' + ('000000' + (d.color >>> 0).toString(16)).slice(-6);
+      c.globalAlpha = 0.28;
+      c.fillRect(X(d.cx - 48), Z(d.cz - 48), 96 * sx, 96 * sy);
+      c.globalAlpha = 1; c.strokeStyle = 'rgba(255,255,255,.18)'; c.lineWidth = 1;
+      c.strokeRect(X(d.cx - 48), Z(d.cz - 48), 96 * sx, 96 * sy);
     }
-    var rs = W.roads || [];
-    ctx.strokeStyle = '#5a6a80'; ctx.lineWidth = 5;
-    for (var r = 0; r < rs.length; r++) {
-      ctx.beginPath();
-      if (rs[r].axis === 'z') { ctx.moveTo(px(rs[r].at), py(rs[r].from)); ctx.lineTo(px(rs[r].at), py(rs[r].to)); }
-      else { ctx.moveTo(px(rs[r].from), py(rs[r].at)); ctx.lineTo(px(rs[r].to), py(rs[r].at)); }
-      ctx.stroke();
+    // roads grid
+    c.strokeStyle = ROAD_COLOR; c.lineWidth = Math.max(2, 12 * sx * 0.6);
+    var roads = [-144, -96, -48, 0, 48, 96, 144];
+    for (var r = 0; r < roads.length; r++) {
+      c.beginPath(); c.moveTo(X(roads[r]), Z(-WORLD)); c.lineTo(X(roads[r]), Z(WORLD)); c.stroke();
+      c.beginPath(); c.moveTo(X(-WORLD), Z(roads[r])); c.lineTo(X(WORLD), Z(roads[r])); c.stroke();
     }
-
-    ctx.fillStyle = '#1a5a8a'; ctx.fillRect(0, 0, px(-560) + 8, h);
-    var lms = W.landmarks || [];
-    ctx.textAlign = 'center';
-    for (var m = 0; m < lms.length; m++) {
-      var lm = lms[m], ic = ICONS[lm.kind] || '•';
-      ctx.fillStyle = lm.kind === 'safehouse' ? '#39d353' : lm.kind === 'shop' ? '#b57edc' : lm.kind === 'hospital' ? '#ff5a5a' : lm.kind === 'police' ? '#4d9fff' : '#ffd23f';
-      ctx.beginPath(); ctx.arc(px(lm.x), py(lm.z), 11, 0, 6.2832); ctx.fill();
-      ctx.fillStyle = '#0a0f18'; ctx.font = 'bold 12px Arial';
-      ctx.fillText(ic, px(lm.x), py(lm.z) + 4);
+    c.strokeStyle = 'rgba(255,255,255,.08)'; c.lineWidth = 1;
+    for (var g = -160; g <= 160; g += 16) {
+      c.beginPath(); c.moveTo(X(g), Z(-WORLD)); c.lineTo(X(g), Z(WORLD)); c.stroke();
+      c.beginPath(); c.moveTo(X(-WORLD), Z(g)); c.lineTo(X(WORLD), Z(g)); c.stroke();
     }
-    var t = missionTarget();
-    if (t) {
-      ctx.strokeStyle = '#ffe14d'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(px(t.x), py(t.z), 14, 0, 6.2832); ctx.stroke();
-      ctx.fillStyle = '#ffe14d'; ctx.font = 'bold 16px Arial';
-      ctx.fillText('◆', px(t.x), py(t.z) - 18);
+    // buildings
+    var bs = [];
+    try { bs = (SB.city && SB.city.buildings) || []; } catch (e) {}
+    c.fillStyle = '#22383f';
+    for (var b = 0; b < bs.length; b++) {
+      c.fillRect(X(bs[b].x - bs[b].w / 2), Z(bs[b].z - bs[b].d / 2), Math.max(1.5, bs[b].w * sx), Math.max(1.5, bs[b].d * sy));
     }
-    var p = W.player && W.player.pos;
-    if (p) {
-      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px(p.x), py(p.z), 7, 0, 6.2832); ctx.fill();
-      ctx.fillStyle = '#ff2a7a'; ctx.beginPath(); ctx.arc(px(p.x), py(p.z), 4, 0, 6.2832); ctx.fill();
-    }
-  }
-  function build() {
-    root = document.createElement('div');
-    root.id = 'sb-map';
-    root.style.cssText = 'position:fixed;inset:0;background:#040810;z-index:55;display:none;color:#fff;font-family:Arial,sans-serif';
-    root.innerHTML = '<div style="display:flex;height:100%;padding:18px;gap:16px;box-sizing:border-box">' +
-      '<div style="flex:1;display:flex;flex-direction:column"><div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:22px;letter-spacing:3px">SOLMAR BAY</b><button id="sb-map-x" style="background:#ff2a7a;color:#fff;border:0;border-radius:5px;padding:6px 12px;cursor:pointer">CLOSE [M]</button></div>' +
-      '<div id="sb-map-gps" style="color:#ffd23f;font-size:14px;margin:6px 0"></div>' +
-      '<canvas id="sb-map-cv" width="640" height="620" style="align-self:center;height:100%;aspect-ratio:640/620;max-width:100%;border:2px solid #2a4a6a;border-radius:8px"></canvas></div>' +
-      '<div style="width:300px;overflow-y:auto"><div style="font-size:13px;letter-spacing:2px;color:#9fb4d8">STORY JOBS — <span id="sb-map-done"></span></div><div id="sb-map-jobs"></div>' +
-      '<div style="font-size:13px;letter-spacing:2px;color:#9fb4d8;margin-top:14px">LEGEND</div><div id="sb-map-legend" style="font-size:13px;line-height:1.9"></div>' +
-      '<div style="font-size:13px;letter-spacing:2px;color:#9fb4d8;margin-top:14px">DISTRICTS</div><div id="sb-map-districts" style="font-size:13px;line-height:1.7"></div>' +
-      '<div style="font-size:13px;letter-spacing:2px;color:#9fb4d8;margin-top:14px">COLLECTIBLES</div><div id="sb-map-coll" style="font-size:13px;line-height:1.7"></div></div></div>';
-    document.body.appendChild(root);
-    cv = root.querySelector('#sb-map-cv');
-    ctx = cv.getContext('2d');
-    root.querySelector('#sb-map-x').onclick = function () { SB.map.hide(); };
-    var lh = '';
-    for (var i = 0; i < LEGEND.length; i++) lh += '<span style="color:' + LEGEND[i][1] + '">' + LEGEND[i][0] + '</span> ' + LEGEND[i][2] + '<br>';
-    root.querySelector('#sb-map-legend').innerHTML = lh;
-  }
-  SB.map = {
-    JOBS: JOBS_FALLBACK,
-    show: function () {
-      if (!root) build();
-      visible = true; root.style.display = 'block';
-      SB.map.render();
-      if (SB.setPaused) SB.setPaused(true);
-    },
-    hide: function () {
-      visible = false;
-      if (root) root.style.display = 'none';
-      if (SB.setPaused && !(SB.dialog && SB.dialog.active())) SB.setPaused(false);
-    },
-    toggle: function () { if (SB.map.isOpen()) SB.map.hide(); else SB.map.show(); },
-    isOpen: function () { return visible; },
-    render: function () {
-      if (!root || !visible) return;
-      drawMap();
-      var js = jobs();
-      var h = '';
-      for (var i = 0; i < js.length; i++) {
-        var j = js[i];
-        var done = i < S.missionsDone;
-        var active = S.mission && S.mission.id === j.id;
-        h += '<div style="padding:8px 0;border-top:1px solid #223">' +
-          '<b style="color:' + (active ? '#ffd23f' : done ? '#39d353' : '#fff') + '">' + (i + 1) + '. ' + j.title + '</b>' +
-          '<span style="float:right;color:#39d353">$' + (j.payout || 0).toLocaleString('en-US') + '</span><br>' +
-          '<span style="color:#9fb4d8;font-size:12px">' + (j.contact || 'MARA SOLIS') + ' · ' + (done ? 'DONE ✓' : active ? 'IN PROGRESS' : 'LOCKED') + '</span></div>';
+    // bank
+    try {
+      var bk = SB.city && SB.city.bank;
+      if (bk) { c.fillStyle = '#f5c542'; c.fillRect(X(bk.x) - 5, Z(bk.z) - 5, 10, 10); }
+    } catch (e) {}
+    // traffic cruisers + heli
+    try {
+      var tr = (SB.city && SB.city.traffic) || [];
+      for (var t = 0; t < tr.length; t++) {
+        if (!tr[t].active || !tr[t].mesh) continue;
+        var px = tr[t].mesh.position.x, pz = tr[t].mesh.position.z;
+        c.fillStyle = tr[t].kind === 'cruiser' ? '#3a86ff' : '#c8c8c8';
+        c.beginPath(); c.arc(X(px), Z(pz), tr[t].kind === 'cruiser' ? 4 : 2.5, 0, 6.2832); c.fill();
       }
-      root.querySelector('#sb-map-jobs').innerHTML = h;
-      root.querySelector('#sb-map-done').textContent = S.missionsDone + '/' + S.missionsTotal + ' DONE';
-      var ds = W.districts || [], dh = '';
-      for (var d = 0; d < ds.length; d++) dh += '· ' + ds[d].name + '<br>';
-      root.querySelector('#sb-map-districts').innerHTML = dh;
-      root.querySelector('#sb-map-coll').innerHTML = '☀ Sun Coins ' + S.coins + '/' + S.coinsTotal + '<br>◉ Sunset Tapes ' + S.tapes + '/' + S.tapesTotal + '<br>♦ Properties 0/2';
-      var t = missionTarget(), g = distTo(t);
-      root.querySelector('#sb-map-gps').textContent = t ? ('GPS → ' + (S.mission ? S.mission.title : 'OBJECTIVE') + ': ' + g + ' m') : 'GPS — no active objective';
+      var heli = SB.city && SB.city.heli;
+      if (heli) { c.fillStyle = '#37e0ff'; c.beginPath(); c.arc(X(heli.position.x), Z(heli.position.z), 4, 0, 6.2832); c.fill(); }
+    } catch (e) {}
+    // objective marker (diamond)
+    var om = objMarker();
+    if (om) {
+      var ox = X(om.x), oz = Z(om.z);
+      c.fillStyle = '#ffd23f'; c.strokeStyle = '#000'; c.lineWidth = 2;
+      c.beginPath(); c.moveTo(ox, oz - 9); c.lineTo(ox + 9, oz); c.lineTo(ox, oz + 9); c.lineTo(ox - 9, oz); c.closePath(); c.fill(); c.stroke();
+      label(om.label || 'OBJECTIVE', ox, oz - 14, '#ffd23f');
     }
+    // boss marker (offset from the objective diamond so the two never stack)
+    var bo = bossXY();
+    if (bo.on) {
+      var bx = X(bo.x) + 14, bz = Z(bo.z);
+      c.fillStyle = '#ff2e4d'; c.strokeStyle = '#000'; c.lineWidth = 2;
+      c.beginPath(); c.arc(bx, bz, 8, 0, 6.2832); c.fill(); c.stroke();
+      c.fillStyle = '#fff'; c.font = 'bold 10px system-ui,sans-serif'; c.textAlign = 'center';
+      c.fillText('!', bx, bz + 3.5);
+      label('BOSS', bx, bz + 20, '#ff5b73');
+    }
+    // hero arrow
+    var hp2 = heroXY();
+    var hx2 = X(hp2.x), hz2 = Z(hp2.z);
+    c.save(); c.translate(hx2, hz2); c.rotate(-hp2.heading);
+    c.fillStyle = '#fff'; c.strokeStyle = '#000'; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(0, -11); c.lineTo(8, 8); c.lineTo(0, 4); c.lineTo(-8, 8); c.closePath(); c.fill(); c.stroke();
+    c.restore();
+    label('YOU', hx2, hz2 + 20, '#fff');
+    // district labels LAST, black outline, never clipped (clamp inside canvas,
+    // clear of the jobs panel on the right, nudged up when a marker sits on them)
+    c.font = 'bold 13px system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    var hxS = X(heroXY().x), hzS = Z(heroXY().z);
+    var omS = objMarker() ? { x: X(objMarker().x), y: Z(objMarker().z) } : null;
+    for (var di = 0; di < ds.length; di++) {
+      var lx = Math.max(46, Math.min(W - 360, X(ds[di].cx))), ly = Math.max(10, Math.min(H - 10, Z(ds[di].cz)));
+      var nearMark = (Math.abs(lx - hxS) < 40 && Math.abs(ly - hzS) < 40) || (omS && Math.abs(lx - omS.x) < 40 && Math.abs(ly - omS.y) < 40);
+      if (nearMark) ly = Math.max(10, ly - 46);
+      c.lineWidth = 4; c.strokeStyle = 'rgba(0,0,0,.9)';
+      c.strokeText(ds[di].name.toUpperCase(), lx, ly);
+      c.fillStyle = '#f2ede1'; c.fillText(ds[di].name.toUpperCase(), lx, ly);
+    }
+    // header
+    c.textAlign = 'left'; c.font = 'bold 15px system-ui,sans-serif';    c.lineWidth = 4; c.strokeStyle = 'rgba(0,0,0,.9)';
+    c.strokeText('SOLMAR BAY', 16, 24); c.fillStyle = '#f5c542'; c.fillText('SOLMAR BAY', 16, 24);
+    c.font = '12px system-ui,sans-serif'; c.fillStyle = '#cfe3ea';
+    c.fillText('ZOOM x' + zoom + '  [+/-]  [M] close', 16, 44);
+    function label(txt, x, y, col) {
+      c.font = 'bold 11px system-ui,sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.9)';
+      c.strokeText(txt, x, y); c.fillStyle = col; c.fillText(txt, x, y);
+    }
+  }
+
+  function buildEl() {
+    el = document.createElement('div');
+    el.id = 'mapov';
+    el.style.cssText = 'position:fixed;inset:0;z-index:65;display:none;background:#0a1418;color:#f2ede1;font:15px/1.5 system-ui,sans-serif;';
+    cv = document.createElement('canvas');
+    cv.id = 'map-canvas';
+    cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;';
+    el.appendChild(cv);
+    var side = document.createElement('div');
+    side.id = 'map-jobs';
+    side.style.cssText = 'position:absolute;right:16px;top:16px;width:264px;background:rgba(8,12,18,.92);border:1px solid rgba(245,197,66,.55);border-radius:10px;padding:12px 14px;';
+    el.appendChild(side);
+    var bar = document.createElement('div');
+    bar.style.cssText = 'position:absolute;left:16px;bottom:16px;display:flex;gap:8px;';
+    [['ZOOM -', 'map-zoom-out'], ['ZOOM +', 'map-zoom-in'], ['CLOSE [M]', 'map-close']].forEach(function (p) {
+      var b = document.createElement('button');
+      b.id = p[1]; b.textContent = p[0];
+      b.style.cssText = 'background:#182430;color:#f2ede1;border:1px solid #f5c542;border-radius:6px;padding:8px 14px;cursor:pointer;font:13px system-ui,sans-serif;';
+      bar.appendChild(b);
+    });
+    el.appendChild(bar);
+    document.body.appendChild(el);
+    ctx2d = cv.getContext('2d');
+    el.querySelector('#map-zoom-in').addEventListener('click', function () { SB.map.zoomIn(); });
+    el.querySelector('#map-zoom-out').addEventListener('click', function () { SB.map.zoomOut(); });
+    el.querySelector('#map-close').addEventListener('click', function () { SB.map.close(); });
+  }
+  function paintJobs() {
+    var side = el && el.querySelector('#map-jobs');
+    if (!side) return;
+    var html = '<b style="letter-spacing:2px;color:#f5c542;">JOBS</b>';
+    var jobs = [];
+    try { jobs = (SB.missions && SB.missions.jobs) ? SB.missions.jobs() : []; } catch (e) {}
+    var activeId = null;
+    try { activeId = SB.missions && SB.missions.active ? SB.missions.active.id : null; } catch (e) {}
+    for (var i = 0; i < jobs.length; i++) {
+      var j = jobs[i];
+      var col = j.st === 'DONE' ? '#7ee2a0' : j.st === 'ACTIVE' ? '#ffd23f' : '#8a97a3';
+      var mark = ('m' + (j.i + 1)) === activeId ? ' &gt;&gt;' : '';
+      html += '<div style="margin:6px 0;color:' + col + ';">' + j.name + ' - $' + j.pay + ' - ' + j.st + mark + '<br><span style="color:#9fb4c0;font-size:12px;">' + j.giver.toUpperCase() + '</span></div>';
+    }
+    var om = objMarker();
+    var gps = om ? ('GPS: ' + (om.label || 'OBJECTIVE') + ' (' + Math.round(om.x) + ', ' + Math.round(om.z) + ')') : 'GPS: NO ACTIVE OBJECTIVE';
+    html += '<div style="margin-top:10px;border-top:1px solid #33475a;padding-top:8px;color:#cfe3ea;font-size:13px;">' + gps + '</div>';
+    var bo = bossXY();
+    if (bo.on) html += '<div style="color:#ff5b73;font-size:13px;">BOSS: SALTJACK (' + Math.round(bo.x) + ', ' + Math.round(bo.z) + ')</div>';
+    side.innerHTML = html;
+  }
+
+  SB.map = {
+    version: '4.0.0-r4',
+    isOpen: function () { return open; },
+    zoomLevel: function () { return zoom; },
+    setZoom: function (z) { zoom = z; if (open) { draw(); paintJobs(); } return zoom; },
+    zoomIn: function () { var i = ZOOMS.indexOf(zoom); zoom = ZOOMS[Math.min(ZOOMS.length - 1, i + 1)]; if (open) { draw(); paintJobs(); } return zoom; },
+    zoomOut: function () { var i = ZOOMS.indexOf(zoom); zoom = ZOOMS[Math.max(0, i - 1)]; if (open) { draw(); paintJobs(); } return zoom; },
+    markers: function () { return { objective: objMarker(), boss: bossXY(), hero: heroXY() }; },
+    open: function () {
+      if (!el) buildEl();
+      open = true;
+      try { pausedBefore = !!SB.state.paused; SB.state.paused = true; } catch (e) {}
+      el.style.display = 'block';
+      cv.width = window.innerWidth || 1280; cv.height = window.innerHeight || 720;
+      draw(); paintJobs();
+      return true;
+    },
+    close: function () {
+      open = false;
+      if (el) el.style.display = 'none';
+      try { SB.state.paused = pausedBefore; } catch (e) {}
+      return true;
+    },
+    toggle: function () { return open ? this.close() : this.open(); },
+    render: function () { if (open) { draw(); paintJobs(); } return open; }
   };
-  window.addEventListener('keydown', function (e) {
-    if (e.code === 'KeyM' && S.started) { e.preventDefault(); SB.map.toggle(); }
-  });
 })();

@@ -1,639 +1,248 @@
+// Solmar Bay — engine.js (B1, v4-rebuild r4)
+// Renderer + loop + RNG deterministik + preset staging. Three.js r149 (vendor).
+// Aturan: tanpa pengacak bawaan dan tanpa jam dinding di file ini.
+// Semua acak dari SB.engine.rng(seed).
 (function () {
-  'use strict';
-
   var SB = window.SB = window.SB || {};
-  SB.version = '3.0.0-b1';
+  var T = window.THREE;
+  var eng = SB.engine = SB.engine || {};
 
-  function mulberry32(seed) {
-    var a = seed >>> 0;
+  // --- RNG deterministik (mulberry32) ---
+  function mulberry32(a) {
     return function () {
-      a |= 0; a = (a + 0x6D2B79F5) | 0;
-      var t = Math.imul(a ^ (a >>> 15), 1 | a);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
     };
   }
-  SB.mulberry32 = mulberry32;
-  SB.rng = mulberry32(1337);
+  eng.rng = function (seed) { return mulberry32(seed >>> 0); };
 
-  function rand(a, b) { return a + SB.rng() * (b - a); }
-  function randInt(a, b) { return Math.floor(rand(a, b + 1)); }
-  function pick(arr) { return arr[Math.floor(SB.rng() * arr.length)]; }
-  function chance(p) { return SB.rng() < p; }
-  SB.rand = rand; SB.randInt = randInt; SB.pick = pick; SB.chance = chance;
+  // --- State global (dibaca HUD B4, polisi B2, misi B3) ---
+  // heat = BINTANG 0-5 (bukan 0-100; poin 0-100 internal di SB.police.pts).
+  SB.state = SB.state || {
+    paused: false, heat: 0, speedKmh: 0, mode: 'car', preset: 'cover',
+    time: { day: 1, dow: 'FRI', hour: 17, min: 24 }
+  };
+  SB.cash = SB.cash || 0;
 
-  function reseed(seed) {
-    SB.state.seed = seed >>> 0;
-    SB.rng = mulberry32(SB.state.seed);
+  // --- Preset staging (6) ---
+  // hero:[x,z] awal, h: heading, kmh: laju awal, cam/look: offset lokal hero.
+  // Forward = (-sin h, -cos h); kamera chase di hero + rot(h)*(0,3.5,+8.6); model hadap -z.
+  var PRESETS = {
+    'cover':     { tod: 'sunset', mode: 'car',  hero: [0, 100],  h: 0,   kmh: 151, cam: [1.2, 2.3, 7.2],  look: [0, 2.2, -3], cars: 24, peds: 20, heli: true,  heat: 4 },
+    'mission':   { tod: 'sunset', mode: 'car',  hero: [0, 86],   h: 0,   kmh: 96,  cam: [1.6, 3.4, 9.5],  look: [0, 2.2, -4], cars: 18, peds: 14, heli: true,  heat: 3 },
+    'night':     { tod: 'night',  mode: 'car',  hero: [0, 70],   h: 0,   kmh: 88,  cam: [1.6, 2.6, 8.0],  look: [0, 2.2, -3], cars: 16, peds: 18, heli: true,  heat: 3 },
+    'onfoot':    { tod: 'night',  mode: 'foot', hero: [-48, 96], h: 0.35, kmh: 0,  cam: [1.2, 2.3, 5.4],  look: [0, 1.3, -3], cars: 10, peds: 24, heli: true,  heat: 3 },
+    'big-score': { tod: 'sunset', mode: 'car',  hero: [0, 52],   h: 0,   kmh: 64,  cam: [2.5, 3.8, 11.5], look: [0, 2.2, -4], cars: 20, peds: 16, heli: true,  heat: 4 },
+    'map':       { tod: 'day',    mode: 'car',  hero: [0, 0],    h: 0,   kmh: 0,   cam: [0, 320, 150],   look: [0, 0, -10],  cars: 12, peds: 8,  heli: false, heat: 0, top: true }
+  };
+  eng.presetNames = ['cover', 'mission', 'night', 'onfoot', 'big-score', 'map'];
+  eng.PRESETS = PRESETS;
+  eng.simTime = 0; eng.frame = 0;
+
+  // --- Langit per waktu (tekstur gradasi canvas, dibuat sekali) ---
+  function skyTex(top, mid, bot) {
+    var c = document.createElement('canvas'); c.width = 16; c.height = 256;
+    var g = c.getContext('2d'), gr = g.createLinearGradient(0, 0, 0, 256);
+    gr.addColorStop(0, top); gr.addColorStop(0.55, mid); gr.addColorStop(1, bot);
+    g.fillStyle = gr; g.fillRect(0, 0, 16, 256);
+    return new T.CanvasTexture(c);
   }
-  SB.reseed = reseed;
-
-  var DAY_NAMES = ['FRI', 'SAT', 'SUN', 'MON', 'TUE', 'WED', 'THU'];
-  var REP_THRESHOLDS = [0, 300, 900, 1600, 2400, 4200];
-  var REP_TITLES = ['STREET KID', 'CORNER HUSTLER', 'NEON RUNNER', 'BAY HUSTLER', 'SOLMAR KING'];
-
-  function defaultState() {
-    return {
-      seed: 1337, cash: 250, health: 100, armor: 0,
-      wanted: 0, heat: 0,
-      rep: 0, repLevel: 1, repTitle: 'STREET KID',
-      day: 1, hour: 17, minute: 24, clockRate: 1,
-      timeOfDay: 'sunset', weather: 'clear',
-      mission: null, missionsDone: 0, missionsTotal: 8,
-      coins: 0, coinsTotal: 20, tapes: 0, tapesTotal: 20,
-      vehicle: null, speedKmh: 0, gear: 'N',
-      location: 'Downtown', street: 'Solmar Ave',
-      radio: { station: 0, name: 'WAVE 88.1', track: 'Neon Drive — Pink Horizon', playing: true },
-      weapons: {
-        fists: { ammo: Infinity },
-        pistol: { ammo: 12, reserve: 48 },
-        smg: { ammo: 32, reserve: 128 },
-        shotgun: { ammo: 6, reserve: 18 },
-        rifle: { ammo: 0, reserve: 0, locked: true }
-      },
-      weapon: 'pistol',
-      started: false, paused: false, scenePreset: null,
-      simTime: 0, elapsed: 0
-    };
+  function blobTex() { // awan / glow lembut
+    var c = document.createElement('canvas'); c.width = 128; c.height = 128;
+    var g = c.getContext('2d'), gr = g.createRadialGradient(64, 64, 4, 64, 64, 62);
+    gr.addColorStop(0, 'rgba(255,255,255,0.9)'); gr.addColorStop(0.6, 'rgba(255,255,255,0.35)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+    return new T.CanvasTexture(c);
   }
-  SB.state = defaultState();
-  SB.resetState = function () {
-    var keepSeed = SB.state.seed;
-    SB.state = defaultState();
-    SB.state.seed = keepSeed;
-    SB._clockMin = 17 * 60 + 24;
+  var TOD = {
+    sunset: { sky: ['#241040', '#c94b7c', '#ffb36b'], fog: 0x8a5570, hemiSky: 0xffd9b0, hemiGnd: 0x4a3550, hemi: 1.0, sun: 0xffb36b, sunI: 1.3, sunPos: [-40, 140, -420], sunCol: 0xffd27a, sunR: 26, glow: 0xff8a4d, glowScale: 190, clouds: 0.65 },
+    night:  { sky: ['#04060f', '#0d1b3a', '#233a5e'], fog: 0x0d1b3a, hemiSky: 0x8fa8d8, hemiGnd: 0x1a2233, hemi: 0.5,  sun: 0x9fb8ff, sunI: 0.5,  sunPos: [180, 230, -350], sunCol: 0xdfe8ff, sunR: 13, glow: 0x8fa8d8, glowScale: 90, clouds: 0.3 },
+    day:    { sky: ['#2f7fc9', '#8ec8ee', '#d8eefc'], fog: 0xa8c8e0, hemiSky: 0xcfe8ff, hemiGnd: 0x8a7a5f, hemi: 1.0,  sun: 0xfff2cf, sunI: 1.3,  sunPos: [80, 330, -260],  sunCol: 0xfff6d8, sunR: 16, glow: 0xfff2b0, glowScale: 150, clouds: 0.7 }
   };
-  SB._clockMin = 17 * 60 + 24;
 
-  function repLevelFor(xp) {
-    var level = 1;
-    for (var i = 0; i < REP_THRESHOLDS.length; i++) {
-      if (xp >= REP_THRESHOLDS[i]) level = i + 1;
-    }
-    return level;
+  function rotXZ(h, x, z) { // putar vektor lokal (x,z) dgn heading h -> dunia
+    var c = Math.cos(h), s = Math.sin(h);
+    return [x * c + z * s, -x * s + z * c];
   }
-  SB.repTitleFor = function (level) { return REP_TITLES[Math.max(0, Math.min(REP_TITLES.length - 1, level - 1))]; };
-  SB.repProgress = function () {
-    var level = SB.state.repLevel;
-    var into = SB.state.rep - REP_THRESHOLDS[level - 1];
-    var next = level >= REP_THRESHOLDS.length ? 0 : REP_THRESHOLDS[level] - REP_THRESHOLDS[level - 1];
-    return { level: level, title: SB.state.repTitle, xpInto: into, xpNext: next };
-  };
-  SB.dayName = function () { return DAY_NAMES[(SB.state.day - 1) % 7]; };
-  SB.formatClock = function () {
-    var h = String(SB.state.hour); if (h.length < 2) h = '0' + h;
-    var m = String(SB.state.minute); if (m.length < 2) m = '0' + m;
-    return SB.dayName() + ' ' + h + ':' + m;
-  };
+  eng.rotXZ = rotXZ;
 
-  var listeners = {};
-  SB.on = function (evt, fn) {
-    if (!listeners[evt]) listeners[evt] = [];
-    listeners[evt].push(fn);
-  };
-  SB.off = function (evt, fn) {
-    var arr = listeners[evt]; if (!arr) return;
-    var i = arr.indexOf(fn); if (i >= 0) arr.splice(i, 1);
-  };
-  SB.emit = function (evt, data) {
-    var arr = listeners[evt]; if (!arr) return;
-    for (var i = 0; i < arr.length; i++) {
-      try { arr[i](data); } catch (e) { console.error('SB event error', evt, e); }
-    }
-  };
-
-  SB.world = {
-    renderer: null, scene: null, camera: null, canvas: null,
-    sun: null, hemi: null, neonLights: [],
-    player: null, vehicles: [], traffic: [], peds: [],
-    police: [], heli: null,
-    colliders: [], roads: [], districts: [], landmarks: [], spawns: {},
-    groups: {}, bounds: { minX: -555, maxX: 465, minZ: -465, maxZ: 525 }
-  };
-
-  SB.input = {
-    keys: {},
-    mouse: { x: 0, y: 0, dx: 0, dy: 0, down: false },
-    isDown: function (code) { return !!SB.input.keys[code]; },
-    axis: function () {
-      var k = SB.input.keys;
-      var x = ((k.KeyD || k.ArrowRight) ? 1 : 0) - ((k.KeyA || k.ArrowLeft) ? 1 : 0);
-      var y = ((k.KeyW || k.ArrowUp) ? 1 : 0) - ((k.KeyS || k.ArrowDown) ? 1 : 0);
-      return { x: x, y: y };
-    }
-  };
-
-  function bindInput() {
-    window.addEventListener('keydown', function (e) {
-      SB.input.keys[e.code] = true;
-      if (SB.state.started && (e.code === 'Space' || e.code.indexOf('Arrow') === 0)) e.preventDefault();
-    });
-    window.addEventListener('keyup', function (e) { SB.input.keys[e.code] = false; });
-    window.addEventListener('blur', function () { SB.input.keys = {}; SB.input.mouse.down = false; });
-    window.addEventListener('mousemove', function (e) {
-      SB.input.mouse.dx = e.clientX - SB.input.mouse.x;
-      SB.input.mouse.dy = e.clientY - SB.input.mouse.y;
-      SB.input.mouse.x = e.clientX; SB.input.mouse.y = e.clientY;
-    });
-    window.addEventListener('mousedown', function (e) { if (e.button === 0) SB.input.mouse.down = true; });
-    window.addEventListener('mouseup', function (e) { if (e.button === 0) SB.input.mouse.down = false; });
+  function applyTod(name) {
+    var d = TOD[name] || TOD.sunset;
+    eng.tod = name;
+    eng.skyMat.map = eng.skyTex[name];
+    eng.scene.fog = new T.Fog(d.fog, 150, 850);
+    eng.hemi.color.setHex(d.hemiSky); eng.hemi.groundColor.setHex(d.hemiGnd);
+    eng.hemi.intensity = d.hemi;
+    eng.sun.color.setHex(d.sun); eng.sun.intensity = d.sunI;
+    eng.sun.position.set(d.sunPos[0], d.sunPos[1], d.sunPos[2]);
+    eng.sunDisc.position.set(d.sunPos[0], d.sunPos[1], d.sunPos[2]);
+    eng.sunDisc.material.color.setHex(d.sunCol);
+    eng.sunDisc.scale.setScalar(d.sunR / 16);
+    eng.sunGlow.position.copy(eng.sunDisc.position);
+    eng.sunGlow.material.color.setHex(d.glow);
+    eng.sunGlow.scale.set(d.glowScale || 150, d.glowScale || 150, 1);
+    eng.sunGlow.material.opacity = name === 'night' ? 0.35 : 0.75;
+    for (var i = 0; i < eng.clouds.length; i++) eng.clouds[i].material.opacity = d.clouds;
   }
 
-  SB.headingForDir = function (dx, dz) { return Math.atan2(-dx, -dz); };
-  SB.forwardOf = function (heading) {
-    return { x: -Math.sin(heading), z: -Math.cos(heading) };
-  };
-
-  var LIGHT_PRESETS = {
-    day: {
-      sunPos: [350, 520, 180], sunColor: 0xfff3da, sunInt: 1.25,
-      hemiSky: 0x9fd4ff, hemiGround: 0x8a7a5a, hemiInt: 0.75,
-      bg: 0x8fc3e8, fog: 0x9fc8e8, fogNear: 500, fogFar: 1600,
-      neon: 0.15, exposure: 1.05
-    },
-    sunset: {
-      sunPos: [-520, 130, 180], sunColor: 0xff8c42, sunInt: 1.5,
-      hemiSky: 0xff9a7a, hemiGround: 0x5a3a4a, hemiInt: 0.6,
-      bg: 0xf78d4e, fog: 0xe88a5a, fogNear: 350, fogFar: 1300,
-      neon: 0.8, exposure: 1.15
-    },
-    night: {
-      sunPos: [220, 420, -160], sunColor: 0x8fa8ff, sunInt: 0.4,
-      hemiSky: 0x1a2440, hemiGround: 0x0c0a14, hemiInt: 0.4,
-      bg: 0x0a0f24, fog: 0x0d1330, fogNear: 250, fogFar: 1100,
-      neon: 1.3, exposure: 1.0
-    }
-  };
-  SB._sunDir = { x: -0.7, y: 0.35, z: 0.25 };
-
-  SB.init = function (opts) {
-    opts = opts || {};
-    if (SB.world.renderer) return SB.world.renderer;
-    if (typeof THREE === 'undefined') throw new Error('SB.init: THREE not loaded (vendor/three.min.js first)');
-
-    var canvas = opts.canvas || null;
-    if (typeof canvas === 'string') canvas = document.getElementById(canvas);
-    if (!canvas) {
-      canvas = document.createElement('canvas');
-      canvas.id = 'sb-canvas';
-      canvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;display:block;';
-      document.body.appendChild(canvas);
-    }
-    var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.outputEncoding = THREE.sRGBEncoding;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
-
-    var scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf78d4e);
-    scene.fog = new THREE.Fog(0xe88a5a, 350, 1300);
-
-    var camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 3000);
-    camera.position.set(0, 6, 70);
-
-    var sun = new THREE.DirectionalLight(0xff8c42, 1.5);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -380; sun.shadow.camera.right = 380;
-    sun.shadow.camera.top = 380; sun.shadow.camera.bottom = -380;
-    sun.shadow.camera.near = 50; sun.shadow.camera.far = 1800;
-    sun.shadow.bias = -0.0005;
-    scene.add(sun); scene.add(sun.target);
-
-    var hemi = new THREE.HemisphereLight(0xff9a7a, 0x5a3a4a, 0.6);
-    scene.add(hemi);
-
-    SB.world.renderer = renderer; SB.world.scene = scene;
-    SB.world.camera = camera; SB.world.canvas = canvas;
-    SB.world.sun = sun; SB.world.hemi = hemi;
-
-    if (opts.seed !== undefined) reseed(opts.seed);
-    if (opts.timeOfDay) SB.setTimeOfDay(opts.timeOfDay);
-
-    bindInput();
-    window.addEventListener('resize', function () { SB.resize(window.innerWidth, window.innerHeight); });
-    SB.emit('init');
-    return renderer;
-  };
-
-  SB.resize = function (w, h) {
-    var r = SB.world.renderer, c = SB.world.camera;
-    if (!r || !c) return;
-    r.setSize(w, h);
-    c.aspect = w / h;
-    c.updateProjectionMatrix();
-  };
-
-  SB.setTimeOfDay = function (mode) {
-    var p = LIGHT_PRESETS[mode]; if (!p) return;
-    SB.state.timeOfDay = mode;
-    var w = SB.world;
-    if (!w.sun) return;
-    w.sun.color.setHex(p.sunColor); w.sun.intensity = p.sunInt;
-    w.hemi.color.setHex(p.hemiSky); w.hemi.groundColor.setHex(p.hemiGround); w.hemi.intensity = p.hemiInt;
-    w.scene.background.setHex(p.bg);
-    w.scene.fog.color.setHex(p.fog);
-    w.scene.fog.near = p.fogNear; w.scene.fog.far = p.fogFar;
-    w.renderer.toneMappingExposure = p.exposure;
-    SB._sunDir = { x: p.sunPos[0], y: p.sunPos[1], z: p.sunPos[2] };
-    for (var i = 0; i < w.neonLights.length; i++) w.neonLights[i].intensity = p.neon;
-    SB.emit('time-of-day', mode);
-  };
-
-  SB.setClock = function (hour, minute) {
-    SB._clockMin = ((hour % 24) * 60 + (minute % 60) + 1440) % 1440;
-    SB.state.hour = Math.floor(SB._clockMin / 60);
-    SB.state.minute = Math.floor(SB._clockMin % 60);
-  };
-
-  SB.cameraRig = {
-    mode: 'chase',
-    distance: 9.5, height: 3.8, lookHeight: 1.5, smooth: 5,
-    freeRadius: 380, freeHeight: 130, freeSpeed: 0.045, freeAngle: 0.6,
-    topHeight: 720
-  };
-  SB._chaseTarget = null;
-
-  SB.setCameraMode = function (mode) {
-    SB.cameraRig.mode = mode;
-    if (mode === 'onfoot') { SB.cameraRig.distance = 4; SB.cameraRig.height = 2.2; SB.cameraRig.lookHeight = 1.3; SB.cameraRig.smooth = 8; }
-    if (mode === 'chase') { SB.cameraRig.distance = 9.5; SB.cameraRig.height = 3.8; SB.cameraRig.lookHeight = 1.5; SB.cameraRig.smooth = 5; }
-  };
-  SB.setChaseTarget = function (t) { SB._chaseTarget = t || null; };
-
-  function chaseTargetPos() {
-    if (SB._chaseTarget) return SB._chaseTarget;
-    if (SB.world.player) return SB.world.player;
-    return { pos: new THREE.Vector3(0, 0, 60), heading: 0 };
-  }
-
-  SB.updateChaseCam = function (dt) {
-    var cam = SB.world.camera; if (!cam) return;
-    var rig = SB.cameraRig;
-    var t = chaseTargetPos();
-    var px = t.pos.x, pz = t.pos.z;
-    var heading = t.heading || 0;
-
-    if (rig.mode === 'free') {
-      rig.freeAngle += dt * rig.freeSpeed;
-      var fx = Math.cos(rig.freeAngle) * rig.freeRadius;
-      var fz = Math.sin(rig.freeAngle) * rig.freeRadius;
-      cam.position.set(fx, rig.freeHeight, fz);
-      cam.lookAt(0, 40, 0);
-      return;
-    }
-    if (rig.mode === 'top') {
-      cam.position.set(px, rig.topHeight, pz + 0.01);
-      cam.lookAt(px, 0, pz);
-      return;
-    }
-    var fwd = SB.forwardOf(heading);
-    var dx = px - fwd.x * rig.distance;
-    var dz = pz - fwd.z * rig.distance;
-    var dy = rig.height;
-    var k = 1 - Math.exp(-rig.smooth * Math.max(dt, 0.0001));
-    cam.position.x += (dx - cam.position.x) * k;
-    cam.position.y += (dy - cam.position.y) * k;
-    cam.position.z += (dz - cam.position.z) * k;
-    cam.lookAt(px + fwd.x * 3, rig.lookHeight, pz + fwd.z * 3);
-  };
-
-  function followSunWithTarget() {
-    var w = SB.world; if (!w.sun) return;
-    var t = chaseTargetPos();
-    var d = SB._sunDir;
-    var len = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z) || 1;
-    w.sun.position.set(t.pos.x + (d.x / len) * 700, (d.y / len) * 700, t.pos.z + (d.z / len) * 700);
-    w.sun.target.position.set(t.pos.x, 0, t.pos.z);
-    w.sun.target.updateMatrixWorld();
-  }
-
-  var updaters = [];
-  SB.registerUpdate = function (fn) { if (updaters.indexOf(fn) < 0) updaters.push(fn); };
-  SB.unregisterUpdate = function (fn) {
-    var i = updaters.indexOf(fn); if (i >= 0) updaters.splice(i, 1);
-  };
-
-  var rafId = 0, lastT = 0, running = false;
-
-  function advanceClock(dt) {
-    SB._clockMin += dt * SB.state.clockRate;
-    SB._clockMin = Math.round(SB._clockMin * 1e6) / 1e6;
-    while (SB._clockMin >= 1440) { SB._clockMin -= 1440; SB.state.day += 1; }
-    SB.state.hour = Math.floor(SB._clockMin / 60);
-    SB.state.minute = Math.floor(SB._clockMin % 60);
-  }
-
-  function stepSim(dt) {
-    SB.state.simTime += dt;
-    SB.state.elapsed = SB.state.simTime;
-    advanceClock(dt);
-    for (var i = 0; i < updaters.length; i++) updaters[i](dt);
-  }
-
-  function loop(t) {
-    if (!running) return;
-    rafId = requestAnimationFrame(loop);
-
-    var raw = (t - lastT) / 1000;
-    var dt = Math.min(Math.max(raw || 0.016, 0), 0.05);
-    lastT = t;
-    if (!SB.state.paused) {
-      stepSim(dt);
-      SB.emit('tick', dt);
-    }
-    updateLocationFromTarget();
-    SB.updateChaseCam(SB.state.paused ? 0.0001 : dt);
-    followSunWithTarget();
-    if (SB.world.renderer && SB.world.scene && SB.world.camera) {
-      SB.world.renderer.render(SB.world.scene, SB.world.camera);
-    }
-    SB.input.mouse.dx = 0; SB.input.mouse.dy = 0;
-  }
-
-  var lastDistrict = '';
-  function updateLocationFromTarget() {
-    var t = chaseTargetPos();
-    var d = SB.districtAt(t.pos.x, t.pos.z);
-    if (d && d.name !== SB.state.location) {
-      SB.state.location = d.name;
-      if (d.name !== lastDistrict) { lastDistrict = d.name; SB.emit('district', d.name); }
-    }
-    var s = SB.streetAt(t.pos.x, t.pos.z);
-    if (s) SB.state.street = s;
-  }
-
-  SB.start = function () {
-    if (running) return;
-    running = true; lastT = performance.now();
-    SB.state.started = true;
-    rafId = requestAnimationFrame(loop);
-    SB.emit('start');
-  };
-  SB.stop = function () {
-    running = false;
-    if (rafId) cancelAnimationFrame(rafId);
-    SB.emit('stop');
-  };
-  SB.setPaused = function (b) {
-    SB.state.paused = !!b;
-    SB.emit('pause', SB.state.paused);
-  };
-
-  SB.advanceSim = function (seconds) {
-    var steps = Math.max(0, Math.ceil(seconds * 60));
-    for (var i = 0; i < steps; i++) stepSim(1 / 60);
-    updateLocationFromTarget();
-  };
-
-  SB.now = function () { return SB.state.simTime; };
-
-  SB.makeTextTexture = function (text, opts) {
-    opts = opts || {};
-    var w = opts.w || 512, h = opts.h || 128;
+  // --- Boot ---
+  eng.boot = function (w, h) {
+    w = w || 1280; h = h || 720;
     var cv = document.createElement('canvas');
-    cv.width = w; cv.height = h;
-    var ctx = cv.getContext('2d');
-    if (opts.bg) { ctx.fillStyle = opts.bg; ctx.fillRect(0, 0, w, h); }
-    if (opts.border) { ctx.strokeStyle = opts.border; ctx.lineWidth = opts.borderWidth || 6; ctx.strokeRect(4, 4, w - 8, h - 8); }
-    ctx.fillStyle = opts.fg || '#ffffff';
-    ctx.font = opts.font || ('bold ' + Math.floor(h * 0.5) + 'px Arial, sans-serif');
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    var lines = String(text).split('\n');
-    var lh = h / (lines.length + 0.4);
-    for (var i = 0; i < lines.length; i++) {
-      ctx.fillText(lines[i], w / 2, lh * (i + 0.7));
+    cv.id = 'game-canvas'; cv.width = w; cv.height = h;
+    document.body.appendChild(cv);
+    eng.renderer = new T.WebGLRenderer({ canvas: cv, antialias: true, preserveDrawingBuffer: true });
+    eng.renderer.setPixelRatio(1);
+    eng.renderer.setSize(w, h);
+    eng.scene = new T.Scene();
+    eng.camera = new T.PerspectiveCamera(58, w / h, 0.1, 1600);
+    eng.hemi = new T.HemisphereLight(0xffd9b0, 0x4a3550, 0.85);
+    eng.scene.add(eng.hemi);
+    eng.sun = new T.DirectionalLight(0xffb36b, 1.15);
+    eng.sun.position.set(-140, 200, -80);
+    eng.scene.add(eng.sun);
+    // kubah langit
+    eng.skyTex = { sunset: skyTex.apply(null, TOD.sunset.sky), night: skyTex.apply(null, TOD.night.sky), day: skyTex.apply(null, TOD.day.sky) };
+    eng.skyMat = new T.MeshBasicMaterial({ map: eng.skyTex.sunset, side: T.BackSide, fog: false });
+    var dome = new T.Mesh(new T.SphereGeometry(700, 24, 12), eng.skyMat);
+    eng.scene.add(dome);
+    // matahari / bulan + glow
+    eng.sunDisc = new T.Mesh(new T.CircleGeometry(16, 32),
+      new T.MeshBasicMaterial({ color: 0xffd27a, fog: false, transparent: true, opacity: 0.96 }));
+    eng.scene.add(eng.sunDisc);
+    eng.sunGlow = new T.Sprite(new T.SpriteMaterial({ map: blobTex(), color: 0xff8a4d, transparent: true, opacity: 0.75, fog: false, depthWrite: false }));
+    eng.sunGlow.scale.set(190, 190, 1);
+    eng.scene.add(eng.sunGlow);
+    // awan (posisi tetap, seed 77)
+    eng.clouds = [];
+    var cr = eng.rng(77);
+    for (var i = 0; i < 9; i++) {
+      var cl = new T.Sprite(new T.SpriteMaterial({ map: blobTex(), color: 0xffffff, transparent: true, opacity: 0.65, fog: false, depthWrite: false }));
+      cl.position.set(-380 + cr() * 760, 90 + cr() * 80, -420 + cr() * 500);
+      var s = 120 + cr() * 140; cl.scale.set(s, s * 0.32, 1);
+      eng.clouds.push(cl); eng.scene.add(cl);
     }
-    var tex = new THREE.CanvasTexture(cv);
-    tex.encoding = THREE.sRGBEncoding;
-    tex.anisotropy = 4;
-    return tex;
+    // hero (posisi/mode diatur setPreset; mesh dibuat city.placeHero)
+    eng.hero = { pos: new T.Vector3(0, 0, 62), heading: 0, speedKmh: 0, mode: 'car' };
+    eng.camOff = [2.4, 2.3, 7.2]; eng.lookOff = [0, 1.2, -3]; eng.top = false;
+    if (SB.city && SB.city.attach) SB.city.attach(eng.scene);
+    eng.setPreset('cover');
+    return eng;
   };
 
-  SB.addCollider = function (x0, z0, x1, z1) {
-    SB.world.colliders.push({ x0: Math.min(x0, x1), z0: Math.min(z0, z1), x1: Math.max(x0, x1), z1: Math.max(z0, z1) });
-  };
-  SB.isBlocked = function (x, z, r) {
-    r = r || 0.5;
-    var b = SB.world.bounds;
-    if (x < b.minX + r || x > b.maxX - r || z < b.minZ + r || z > b.maxZ - r) return true;
-    var cs = SB.world.colliders;
-    for (var i = 0; i < cs.length; i++) {
-      var c = cs[i];
-      if (x + r > c.x0 && x - r < c.x1 && z + r > c.z0 && z - r < c.z1) return true;
+  // --- Kamera ---
+  eng.updateCamera = function () {
+    var hr = eng.hero, cam = eng.camera;
+    if (eng.sunDisc) eng.sunDisc.lookAt(cam.position);
+    if (eng.top) {
+      cam.position.set(eng.camOff[0], eng.camOff[1], eng.camOff[2]);
+      cam.lookAt(eng.lookOff[0], eng.lookOff[1], eng.lookOff[2]);
+      return;
     }
-    return false;
+    var o = rotXZ(hr.heading, eng.camOff[0], eng.camOff[2]);
+    cam.position.set(hr.pos.x + o[0], eng.camOff[1], hr.pos.z + o[1]);
+    var l = rotXZ(hr.heading, eng.lookOff[0], eng.lookOff[2]);
+    cam.lookAt(hr.pos.x + l[0], eng.lookOff[1], hr.pos.z + l[1]);
   };
-  SB.clampToBounds = function (x, z) {
-    var b = SB.world.bounds;
-    return {
-      x: Math.max(b.minX, Math.min(b.maxX, x)),
-      z: Math.max(b.minZ, Math.min(b.maxZ, z))
+
+  // --- Preset (boleh di-wrap berantai oleh B2/B3/B4) ---
+  eng.setPreset = function (name) {
+    var p = PRESETS[name] || PRESETS.cover;
+    SB.state.preset = name; eng.preset = name;
+    applyTod(p.tod);
+    var hr = eng.hero;
+    hr.pos.set(p.hero[0], 0, p.hero[1]);
+    hr.heading = p.h; hr.speedKmh = p.kmh; hr.mode = p.mode;
+    SB.state.heat = p.heat; SB.state.speedKmh = p.kmh; SB.state.mode = p.mode;
+    SB.state.time = p.tod === 'night' ? { day: 1, dow: 'FRI', hour: 21, min: 48 }
+      : p.tod === 'day' ? { day: 1, dow: 'FRI', hour: 12, min: 5 }
+      : { day: 1, dow: 'FRI', hour: 17, min: 24 };
+    eng.camOff = p.cam; eng.lookOff = p.look; eng.top = !!p.top;
+    if (SB.city) {
+      if (SB.city.setDensity) SB.city.setDensity(p.cars, p.peds);
+      if (SB.city.setHeli) SB.city.setHeli(p.heli, hr);
+      if (SB.city.placeHero) SB.city.placeHero(hr);
+    }
+    eng.updateCamera();
+    eng.render();
+  };
+
+  // --- Kecepatan hero (dipakai staging B5 + didelegasi SB.vehicles.setSpeedKmh B2) ---
+  eng.setSpeedKmh = function (kmh) {
+    eng.hero.speedKmh = kmh;
+    SB.state.speedKmh = kmh;
+  };
+
+  // --- Posisi moncong senjata (dipakai SB.player.fire B2 -> SB.city.burst) ---
+  eng.muzzlePos = function () {
+    var hr = eng.hero;
+    var off = hr.mode === 'foot' ? [0.35, 1.35, -1.3] : [0.8, 1.05, -2.4];
+    var o = rotXZ(hr.heading, off[0], off[2]);
+    return new T.Vector3(hr.pos.x + o[0], off[1], hr.pos.z + o[1]);
+  };
+  eng.heroPos = function () { return eng.hero.pos.clone(); };
+
+  // --- Satu langkah sim + render (boleh di-wrap sekali oleh B2, guard SB._b2step) ---
+  eng.step = function (dt, noRender) {
+    dt = dt || 1 / 60;
+    if (!SB.state.paused) {
+      eng.simTime += dt; eng.frame++;
+      var hr = eng.hero;
+      if (hr.mode === 'car' && hr.speedKmh > 0) {
+        var d = hr.speedKmh / 3.6 * dt;
+        hr.pos.x += -Math.sin(hr.heading) * d;
+        hr.pos.z += -Math.cos(hr.heading) * d;
+        if (hr.pos.z < -145) hr.pos.z += 290;
+        if (hr.pos.z > 145) hr.pos.z -= 290;
+        if (hr.pos.x < -145) hr.pos.x += 290;
+        if (hr.pos.x > 145) hr.pos.x -= 290;
+      }
+      if (SB.city && SB.city.update) SB.city.update(dt, eng.simTime);
+      if (SB.city && SB.city.placeHero) SB.city.placeHero(hr);
+      SB.state.speedKmh = hr.speedKmh;
+    }
+    eng.updateCamera();
+    if (!noRender) eng.render();
+  };
+
+  // Majukan sim n langkah dt tetap, abaikan pause (alat staging).
+  // Render hanya di langkah terakhir supaya staging cepat.
+  eng.advanceSim = function (n, dt) {
+    dt = dt || 1 / 60;
+    var p = SB.state.paused; SB.state.paused = false;
+    for (var i = 0; i < n; i++) eng.step(dt, i < n - 1);
+    SB.state.paused = p;
+  };
+
+  eng.render = function () { eng.renderer.render(eng.scene, eng.camera); };
+  eng.shot = function () { eng.render(); return eng.renderer.domElement.toDataURL('image/png'); };
+
+  // --- Loop utama (dipanggil main.js B5; loop juga panggil SB.missions.update bila ada) ---
+  eng._raf = 0;
+  eng.start = function () {
+    if (eng._raf) return;
+    var tick = function () {
+      eng._raf = requestAnimationFrame(tick);
+      eng.step(1 / 60);
+      if (SB.missions && SB.missions.update) SB.missions.update(1 / 60);
     };
+    tick();
   };
-  SB.districtAt = function (x, z) {
-    var ds = SB.world.districts;
-    for (var i = 0; i < ds.length; i++) {
-      var d = ds[i];
-      if (x >= d.x0 && x <= d.x1 && z >= d.z0 && z <= d.z1) return d;
-    }
-    return { id: 'outskirts', name: 'Solmar Bay', x0: 0, z0: 0, x1: 0, z1: 0, tint: 0x888888 };
-  };
-  SB.streetAt = function (x, z) {
-    var best = null, bestD = 1e9;
-    var rs = SB.world.roads;
-    for (var i = 0; i < rs.length; i++) {
-      var r = rs[i];
-      var d = r.axis === 'x' ? Math.abs(z - r.at) : Math.abs(x - r.at);
-      if (d < bestD) { bestD = d; best = r; }
-    }
-    return best && bestD <= best.width / 2 + 6 ? best.name : '';
-  };
+  eng.stop = function () { if (eng._raf) cancelAnimationFrame(eng._raf); eng._raf = 0; };
 
-  function wantedFromHeat(heat) {
-    if (heat <= 0) return 0;
-    if (heat < 20) return 1;
-    if (heat < 40) return 2;
-    if (heat < 60) return 3;
-    if (heat < 80) return 4;
-    return 5;
-  }
-  SB.setWanted = function (n) {
-    n = Math.max(0, Math.min(5, Math.round(n)));
-    SB.state.heat = n === 0 ? 0 : n * 20 - 1;
-    if (SB.state.wanted !== n) { SB.state.wanted = n; SB.emit('wanted', n); }
+  // Boot dari query (?preset=cover&adv=90&speed=151&pause=1). Dipanggil main.js.
+  eng.bootFromQuery = function () {
+    var q = new URLSearchParams(location.search);
+    eng.boot(1280, 720);
+    eng.setPreset(q.get('preset') || q.get('scene') || 'cover');
+    var adv = parseInt(q.get('adv') || '0', 10);
+    if (adv > 0) eng.advanceSim(adv);
+    var sp = parseInt(q.get('speed') || '', 10);
+    if (!isNaN(sp)) eng.setSpeedKmh(sp);
+    if (q.get('pause') === '1') SB.state.paused = true;
+    if (q.get('loop') !== '0') eng.start();
   };
-  SB.addHeat = function (n) {
-    var old = SB.state.wanted;
-    SB.state.heat = Math.max(0, Math.min(100, SB.state.heat + n));
-    SB.state.wanted = wantedFromHeat(SB.state.heat);
-    if (SB.state.wanted !== old) SB.emit('wanted', SB.state.wanted);
-    SB.emit('heat', SB.state.heat);
-  };
-  SB.addCash = function (n) {
-    SB.state.cash = Math.max(0, SB.state.cash + Math.round(n));
-    SB.emit('cash', SB.state.cash);
-  };
-  SB.addRep = function (n) {
-    var oldLevel = SB.state.repLevel;
-    SB.state.rep = Math.max(0, SB.state.rep + Math.round(n));
-    SB.state.repLevel = repLevelFor(SB.state.rep);
-    SB.state.repTitle = SB.repTitleFor(SB.state.repLevel);
-    SB.emit('rep', { rep: SB.state.rep, level: SB.state.repLevel, levelUp: SB.state.repLevel > oldLevel });
-  };
-  SB.setHealth = function (n) {
-    SB.state.health = Math.max(0, Math.min(100, Math.round(n)));
-    SB.emit('health', SB.state.health);
-    if (SB.state.health <= 0) SB.emit('wasted');
-  };
-  SB.setArmor = function (n) {
-    SB.state.armor = Math.max(0, Math.min(100, Math.round(n)));
-    SB.emit('armor', SB.state.armor);
-  };
-  SB.setMission = function (m) {
-    SB.state.mission = m || null;
-    if (m) SB.emit('mission-start', m);
-  };
-  SB.clearMission = function () {
-    SB.state.mission = null;
-    SB.emit('mission-clear');
-  };
-  SB.serializeState = function () {
-    return JSON.parse(JSON.stringify(SB.state));
-  };
-
-  function ensureStagingPlayer(mode) {
-    if (SB.world.player) return SB.world.player;
-    var scene = SB.world.scene;
-    if (!scene) return null;
-    var spawn = (SB.world.spawns && SB.world.spawns.player) || { x: 0, z: 60, heading: 0 };
-    var group, onFoot = (mode === 'onfoot');
-    if (!onFoot && SB.city && SB.city.makeCarMesh) {
-      group = SB.city.makeCarMesh('sport', 0xff5a8a);
-    } else if (onFoot && SB.city && SB.city.makePedMesh) {
-      group = SB.city.makePedMesh(0xff5a8a, 0xc98a5a);
-    } else {
-      group = new THREE.Group();
-      var body = new THREE.Mesh(
-        new THREE.BoxGeometry(2, onFoot ? 1.8 : 0.8, onFoot ? 0.6 : 4.2),
-        new THREE.MeshLambertMaterial({ color: 0xff5a8a }));
-      body.position.y = onFoot ? 0.9 : 0.5;
-      body.castShadow = true;
-      group.add(body);
-    }
-    group.position.set(spawn.x, 0, spawn.z);
-    group.rotation.y = spawn.heading || 0;
-    scene.add(group);
-    SB.world.player = {
-      mesh: group,
-      pos: group.position,
-      heading: spawn.heading || 0,
-      speed: 0, onFoot: onFoot,
-      vehicle: onFoot ? null : { id: 'stage-vento', name: 'VENTO STRADA', kind: 'sport', condition: 100 }
-    };
-    if (!onFoot) {
-      SB.state.vehicle = { id: 'stage-vento', name: 'VENTO STRADA', kind: 'sport', condition: 100 };
-      SB.state.speedKmh = 0; SB.state.gear = 'N';
-    }
-    SB.setChaseTarget(SB.world.player);
-    return SB.world.player;
-  }
-  SB.ensureStagingPlayer = ensureStagingPlayer;
-
-  function placePlayer(x, z, heading) {
-    var p = SB.world.player;
-    if (!p) return;
-    if (SB.player && SB.player.setPosition) { SB.player.setPosition(x, z, heading); return; }
-    p.pos.set(x, 0, z);
-    p.heading = heading;
-    if (p.mesh) p.mesh.rotation.y = heading;
-  }
-
-  var SCENE_PRESETS = {
-
-    cover: function () {
-      SB.setTimeOfDay('sunset'); SB.setClock(17, 24);
-      SB.setCameraMode('chase');
-      ensureStagingPlayer('chase');
-      placePlayer(0, 40, 0);
-      SB.setWanted(4); SB.state.cash = 18450; SB.state.rep = 1960;
-      SB.state.repLevel = repLevelFor(1960); SB.state.repTitle = SB.repTitleFor(SB.state.repLevel);
-      SB.setMission({ id: 'big-score', title: 'THE BIG SCORE', contact: 'MARA SOLIS', stage: 3, stageTotal: 4, objective: 'Escape with the cash! Lose the cops', payout: 5000 });
-      SB.state.speedKmh = 151; SB.state.gear = 'G4';
-      SB.state.radio = { station: 0, name: 'WAVE 88.1', track: 'Neon Drive — Pink Horizon', playing: true };
-    },
-
-    onfoot: function () {
-      SB.setTimeOfDay('sunset'); SB.setClock(17, 40);
-      SB.setCameraMode('onfoot');
-      ensureStagingPlayer('onfoot');
-      placePlayer(250, 88, 0);
-      SB.setWanted(1); SB.state.cash = 12400;
-      SB.clearMission();
-    },
-
-    mission: function () {
-      SB.setTimeOfDay('sunset'); SB.setClock(18, 5);
-      SB.setCameraMode('chase');
-      ensureStagingPlayer('chase');
-      placePlayer(0, 40, -0.35);
-      SB.setWanted(2); SB.state.cash = 12400;
-      SB.setMission({ id: 'big-score', title: 'THE BIG SCORE', contact: 'MARA SOLIS', stage: 1, stageTotal: 4, objective: 'Reach Solmar National Bank', payout: 5000 });
-    },
-
-    map: function () {
-      SB.setTimeOfDay('day'); SB.setClock(12, 0);
-      SB.setCameraMode('top');
-      ensureStagingPlayer('chase');
-      placePlayer(0, 0, 0);
-      SB.setWanted(0);
-      SB.clearMission();
-    },
-
-    night: function () {
-      SB.setTimeOfDay('night'); SB.setClock(21, 30);
-      SB.setCameraMode('chase');
-      ensureStagingPlayer('chase');
-      placePlayer(0, -380, Math.PI);
-      SB.setWanted(3); SB.state.cash = 15200; SB.state.rep = 1960;
-      SB.state.repLevel = repLevelFor(1960); SB.state.repTitle = SB.repTitleFor(SB.state.repLevel);
-      SB.setMission({ id: 'harbor-lights', title: 'HARBOR LIGHTS', contact: 'MARA SOLIS', stage: 2, stageTotal: 3, objective: 'Meet the crew at Pelican Marina', payout: 3200 });
-    },
-
-    title: function () {
-      SB.setTimeOfDay('sunset'); SB.setClock(18, 30);
-      SB.setCameraMode('free');
-      SB.setWanted(0);
-      SB.clearMission();
-    }
-  };
-
-  SB.applyScenePreset = function (name) {
-    var fn = SCENE_PRESETS[name];
-    if (!fn) return false;
-    SB.state.scenePreset = name;
-    fn();
-
-    if (SB.world.camera) SB.updateChaseCam(5);
-    SB.emit('scene', { name: name });
-    return true;
-  };
-
-  SB.parseQuery = function () {
-    return new URLSearchParams(window.location.search || '');
-  };
-
-  SB.bootFromQuery = function () {
-    var q = SB.parseQuery();
-    if (q.get('seed')) reseed(parseInt(q.get('seed'), 10) || 1337);
-    var scene = q.get('scene');
-    if (scene) SB.applyScenePreset(scene);
-    if (q.get('t')) SB.advanceSim(parseFloat(q.get('t')) || 0);
-    return q;
-  };
-
 })();
