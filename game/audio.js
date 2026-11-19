@@ -1,118 +1,47 @@
-(function () {
-  'use strict';
-  var SB = window.SB = window.SB || {};
-  var ctx = null, master = null, musicGain = null, engOsc = null, engGain = null,
-    sirOsc = null, sirGain = null, sirLfo = null, schedTimer = 0, step = 0, nextT = 0,
-    station = 0, playing = true;
-
-  var BASS = [
-    [0, 0, 12, 0, 3, 0, 10, 7],
-    [0, 0, 7, 0, 5, 7, 10, 12],
-    [0, 12, 0, 7, 0, 10, 12, 15]
-  ];
-  var LEAD = [0, -1, 12, -1, 7, -1, 10, -1, 12, -1, 7, -1, 15, -1, 12, -1];
-  function midi(m) { return 440 * Math.pow(2, (m - 69) / 12); }
-  function ensure() {
-    if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return true; }
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return false;
-    try { ctx = new AC(); } catch (e) { return false; }
-    master = ctx.createGain(); master.gain.value = 0.5; master.connect(ctx.destination);
-    musicGain = ctx.createGain(); musicGain.gain.value = playing ? 0.32 : 0; musicGain.connect(master);
-    return true;
-  }
-  function note(midiN, t, dur, wave, gain, dest) {
-    var o = ctx.createOscillator(), g = ctx.createGain();
-    o.type = wave; o.frequency.value = midi(midiN);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g); g.connect(dest || musicGain);
-    o.start(t); o.stop(t + dur + 0.05);
-  }
-  function scheduler() {
-    if (!ctx || !playing) return;
-    var st = SB.radio ? SB.radio.stationDef(station) : null;
-    if (!st) return;
-    var spb = 60 / st.bpm / 2;
-    while (nextT < ctx.currentTime + 0.3) {
-      var bar = Math.floor(step / 8) % 2;
-      var b = BASS[station][step % 8];
-      note(st.root + b, nextT, spb * 0.9, st.wave, 0.5);
-      var l = LEAD[step % 16];
-      if (l >= 0 && step % 4 === 0) note(st.root + 24 + l, nextT, spb * 1.8, 'sine', 0.12);
-      if (step % 8 === 4) note(st.root + 36, nextT, 0.05, 'square', 0.05);
-      step++; nextT += spb;
-      if (bar === 1 && step % 8 === 0) step += 0;
-    }
-  }
-  SB.audio = {
-    init: function () {
-      if (SB.audio._inited) return;
-      SB.audio._inited = true;
-      var go = function () { if (ensure() && ctx.state === 'suspended') ctx.resume(); };
-      window.addEventListener('pointerdown', go);
-      window.addEventListener('keydown', go);
-      go();
-    },
-    ready: function () { return !!ctx; },
-    engine: function (speedKmh) {
-      if (!ensure()) return;
-      if (!engOsc) {
-        engOsc = ctx.createOscillator(); engGain = ctx.createGain();
-        engOsc.type = 'sawtooth'; engOsc.frequency.value = 55;
-        engGain.gain.value = 0; engOsc.connect(engGain); engGain.connect(master); engOsc.start();
-      }
-      var sp = speedKmh || 0;
-      engOsc.frequency.setTargetAtTime(45 + sp * 1.1, ctx.currentTime, 0.1);
-      engGain.gain.setTargetAtTime(sp > 1 ? 0.035 : 0.012, ctx.currentTime, 0.1);
-    },
-    siren: function (on) {
-      if (!ensure()) return;
-      if (on && !sirOsc) {
-        sirOsc = ctx.createOscillator(); sirGain = ctx.createGain(); sirLfo = ctx.createOscillator();
-        var lg = ctx.createGain(); lg.gain.value = 180;
-        sirOsc.type = 'sine'; sirOsc.frequency.value = 750;
-        sirLfo.type = 'sine'; sirLfo.frequency.value = 0.9;
-        sirLfo.connect(lg); lg.connect(sirOsc.frequency);
-        sirGain.gain.value = 0.05;
-        sirOsc.connect(sirGain); sirGain.connect(master);
-        sirOsc.start(); sirLfo.start();
-      } else if (!on && sirOsc) {
-        try { sirOsc.stop(); sirLfo.stop(); } catch (e) {}
-        sirOsc = null; sirLfo = null; sirGain = null;
-      }
-    },
-    shot: function () {
-      if (!ensure()) return;
-      var len = Math.floor(ctx.sampleRate * 0.12), buf = ctx.createBuffer(1, len, ctx.sampleRate),
-        d = buf.getChannelData(0);
-      for (var i = 0; i < len; i++) d[i] = (SB.rng() * 2 - 1) * (1 - i / len);
-      var src = ctx.createBufferSource(); src.buffer = buf;
-      var f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1800;
-      var g = ctx.createGain(); g.gain.value = 0.4;
-      src.connect(f); f.connect(g); g.connect(master); src.start();
-    },
-    pickup: function () {
-      if (!ensure()) return;
-      var t = ctx.currentTime;
-      note(81, t, 0.12, 'sine', 0.3, master);
-      note(88, t + 0.09, 0.18, 'sine', 0.3, master);
-    },
-    setStation: function (i) {
-      station = ((i || 0) % 3 + 3) % 3;
-      step = 0;
-      if (!ensure()) return;
-      if (!schedTimer) {
-        nextT = ctx.currentTime + 0.05;
-        schedTimer = setInterval(scheduler, 120);
-      }
-      if (musicGain) musicGain.gain.value = playing ? 0.32 : 0;
-    },
-    setPlaying: function (b) {
-      playing = !!b;
-      if (musicGain) musicGain.gain.value = playing ? 0.32 : 0;
-      if (playing && ctx && !schedTimer) SB.audio.setStation(station);
-    }
-  };
+/* Solmar Bay v4 audio (B4) — procedural WebAudio: hum, siren, shots, radio bassline. */
+(function(){'use strict';var SB=window.SB=window.SB||{},D=document;
+var MIN=[0,0,3,5,7,5,3,0],MAJ=[0,2,4,5,7,5,4,2];
+var A={ctx:null,mg:null,st:null,step:0,next:0,humO:null,humG:null,sirO:null,sirG:null,playing:false,
+ ensure:function(){if(A.ctx)return A.ctx;try{var C=window.AudioContext||window.webkitAudioContext;
+  if(!C)return null;A.ctx=new C();A.mg=A.ctx.createGain();A.mg.gain.value=.5;A.mg.connect(A.ctx.destination);
+  A.humO=A.ctx.createOscillator();A.humO.type='sawtooth';A.humO.frequency.value=55;
+  var f=A.ctx.createBiquadFilter();f.type='lowpass';f.frequency.value=380;
+  A.humG=A.ctx.createGain();A.humG.gain.value=0;A.humO.connect(f);f.connect(A.humG);A.humG.connect(A.mg);A.humO.start();
+  A.sirO=A.ctx.createOscillator();A.sirO.type='triangle';A.sirO.frequency.value=800;
+  var lfo=A.ctx.createOscillator();lfo.type='square';lfo.frequency.value=.6;
+  var lg=A.ctx.createGain();lg.gain.value=160;lfo.connect(lg);lg.connect(A.sirO.frequency);
+  A.sirG=A.ctx.createGain();A.sirG.gain.value=0;A.sirO.connect(A.sirG);A.sirG.connect(A.mg);
+  A.sirO.start();lfo.start()}catch(e){A.ctx=null}return A.ctx},
+ setStation:function(s){A.st=s;if(A.playing&&A.ctx){A.step=0;A.next=A.ctx.currentTime+.05}},
+ startRadio:function(){if(!A.ensure())return;if(A.ctx.state==='suspended')A.ctx.resume();
+  if(A.playing)return;A.playing=true;A.step=0;A.next=A.ctx.currentTime+.1;
+  setInterval(function(){if(!A.playing||!A.ctx)return;var spb=60/(A.st?A.st.bpm:112)/2;
+   while(A.next<A.ctx.currentTime+.18){A.note(A.step,spb);A.step=(A.step+1)%16;A.next+=spb}},90)},
+ note:function(i,spb){var s=A.st||{bpm:112,root:55,w:'sawtooth',min:1},t=A.next;
+  var sc=s.min?MIN:MAJ,deg=sc[i%8],fr=s.root*Math.pow(2,deg/12)*(i>=8?2:1);
+  var o=A.ctx.createOscillator(),g=A.ctx.createGain();o.type=s.w;o.frequency.value=fr;
+  g.gain.setValueAtTime(.14,t);g.gain.exponentialRampToValueAtTime(.001,t+spb*.95);
+  o.connect(g);g.connect(A.mg);o.start(t);o.stop(t+spb);
+  if(i%4===0){var k=A.ctx.createOscillator(),kg=A.ctx.createGain();k.type='sine';
+   k.frequency.setValueAtTime(120,t);k.frequency.exponentialRampToValueAtTime(40,t+.12);
+   kg.gain.setValueAtTime(.25,t);kg.gain.exponentialRampToValueAtTime(.001,t+.14);
+   k.connect(kg);kg.connect(A.mg);k.start(t);k.stop(t+.15)}},
+ hum:function(kmh){if(!A.ctx||!A.humG)return;var g=kmh>1?.02+Math.min(.06,kmh/151*.06):0;
+  A.humG.gain.setTargetAtTime(g,A.ctx.currentTime,.1);
+  A.humO.frequency.setTargetAtTime(50+kmh*.35,A.ctx.currentTime,.1)},
+ siren:function(on){if(!A.ctx||!A.sirG)return;A.sirG.gain.setTargetAtTime(on?.045:0,A.ctx.currentTime,.2)},
+ shot:function(){if(!A.ensure())return;try{var t=A.ctx.currentTime,len=A.ctx.sampleRate*.09,
+  b=A.ctx.createBuffer(1,len,A.ctx.sampleRate),d=b.getChannelData(0);
+  var sd=1234567;for(var i=0;i<len;i++){sd=(sd*1103515245+12345)&0x7fffffff;d[i]=(sd/0x40000000-1)*(1-i/len);}
+  var s=A.ctx.createBufferSource();s.buffer=b;var f=A.ctx.createBiquadFilter();f.type='bandpass';f.frequency.value=1200;
+  var g=A.ctx.createGain();g.gain.value=.4;s.connect(f);f.connect(g);g.connect(A.mg);s.start(t)}catch(e){}},
+ pickup:function(){if(!A.ensure())return;try{var t=A.ctx.currentTime;
+  [660,880].forEach(function(fr,i){var o=A.ctx.createOscillator(),g=A.ctx.createGain();o.type='sine';o.frequency.value=fr;
+   g.gain.setValueAtTime(.2,t+i*.08);g.gain.exponentialRampToValueAtTime(.001,t+i*.08+.12);
+   o.connect(g);g.connect(A.mg);o.start(t+i*.08);o.stop(t+i*.08+.13)})}catch(e){}},
+ init:function(){if(A._in)return;A._in=1;
+  var go=function(){A.ensure();A.startRadio()};
+  D.addEventListener('pointerdown',go,{once:true});D.addEventListener('keydown',go,{once:true})}};
+SB.audio=A;
+if(D.readyState!=='loading')A.init();else D.addEventListener('DOMContentLoaded',function(){A.init()});
 })();

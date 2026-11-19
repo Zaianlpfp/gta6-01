@@ -1,88 +1,53 @@
-# Solmar Bay — Open-World Crime in 3D
+# Solmar Bay — GTA-style 3D Open World
 
-[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![rank](https://make.fun/badge/gta6-01/Zaianlpfp/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![reward](https://make.fun/badge/gta6-01/Zaianlpfp/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+![gta6-01](https://make.fun/badge/gta6-01.svg)
+![rank](https://make.fun/badge/gta6-01/rank.svg)
+![reward](https://make.fun/badge/gta6-01/reward.svg)
 
-**Solmar Bay** is a 3D open-world crime game for make.fun's
-[gta6-01 "Make GTA 6" bounty](https://make.fun/bounty/gta6-01) — a sun-soaked
-coastal city you explore on foot and by car, with traffic and pedestrians,
-a wanted level the Solmar PD actually answers, and an 8-job story.
+A complete open-world crime game in the spirit of GTA 6, built for the
+[make.fun gta6-01 bounty](https://make.fun/bounty/gta6-01). It runs offline
+in a desktop browser from static files — open `game/index.html`, no build
+step, no network request.
 
-You are a newcomer in Solmar Bay. Mara Solis, the fixer, has work for you:
-taxi fares, a package run, a stolen VENTO STRADA, a midnight race down Neon
-Mile, a chop-shop delivery, a harbor meet, a four-star heat run, and finally
-**THE BIG SCORE** — Solmar National Bank. Earn cash and REP, climb from
-STREET KID to SOLMAR KING, and don't get caught.
+## The game
 
-## How to play
+Solmar Bay is a sun-soaked fictional city on the coast: nine named
+districts (Coral Strand, Neon Mile, Palmetto Heights, Deco Row, Downtown,
+Old Mercado, Keystone Field, Pelican Marina, Bayline Docks), a beach and
+marina, downtown towers, neon streets, palms and billboards, at sunset and
+at night.
 
-Open `game/index.html` in desktop Chrome (or run `node serve.ts` and open
-http://localhost:8080). No build step, no network request — everything is
-local, Three.js included.
+- **Drive and steal cars** — chase camera, traffic, pedestrians, car
+  condition and gears, damage and dents.
+- **8 story missions** with payouts ($500–$5,000), a timer on the timed
+  ones, and a side job (Mercado Standoff) — plus a full city map (M) with
+  every job, payout and legend.
+- **Wanted 0–5 stars** — foot cops, cruiser pursuits and roadblocks, and
+  the GULL-1 helicopter with a spotlight cone and search zone.
+- **Combat on foot and from the car** — 4 weapons (fists, pistol, SMG,
+  shotgun; rifle locked) with a weapon wheel (1–4), muzzle flash, tracers
+  and reload (R).
+- **Radio** — 3 stations (WAVE 88.1, SOL 101.9, BAY 96.5), Q to switch.
+- **REP and ranks** from STREET KID to LEGEND OF SOLMAR, a 3-person crew
+  (driver, mechanic, lookout) with portraits, and dialog with the fixer
+  Mara Solis, mechanic Jax and getaway driver Lucia Ortega.
+- **Shops and systems** — gun store, respray (lose 1 wanted star),
+  safehouse save point, hospital healing, and localStorage saves.
+- **HUD** — health and armor bars, minimap with search zone and mission
+  marker, mission timer, SBPD response list, clock and day, speed and car
+  condition.
 
-| Key | Action |
-| --- | --- |
-| WASD / arrows | Walk / drive (Shift = run / nitro) |
-| E | Enter or steal a car / exit a car |
-| Mouse + click / F | Aim and shoot |
-| 1–5 | Switch weapon (fists, pistol, SMG, shotgun, rifle) |
-| R | Reload |
-| Space | Handbrake |
-| Q / R | Switch radio station (Q next, R previous) |
-| M | Full-city map (jobs, legend, GPS) |
-| P / Esc | Pause |
+## Controls
 
-## Features
+- **WASD** move / drive, **Shift** run, **E** enter or exit a car,
+  **mouse** aim and shoot, **R** reload, **1–4** weapons, **Q** radio,
+  **M** map, **F** shop, **Esc** close.
 
-- **A city to explore** — 9 named districts (Downtown, Coral Strand,
-  Pelican Marina, Old Mercado, Neon Mile, Palmetto Heights, Deco Row,
-  Bayline Docks, Keystone Field), beach, marina, park, and named landmarks
-  (Solmar National Bank, St. Coral Hospital, Solmar PD HQ, Hotel Palmera,
-  Jax's Garage, Mara's Safehouse, CLUB VOLTAGE).
-- **8 story jobs with payouts** ($500–$5,000) plus side work: taxi fares,
-  street races, the MERCADO STANDOFF, 20 Sun Coins and 20 Sunset Tapes.
-- **Wanted 0–5 stars** — cruisers that chase and ram, foot cops, roadblocks,
-  and the GULL-1 police helicopter with a spotlight and search zone.
-  Busted or wasted? You wake up at St. Coral Hospital, 10% lighter.
-- **6 original cars to steal and drive** (VENTO STRADA, SOLMAR GT, PALMERA
-  LX, SOLMAR CAB, BAYLINE HAULER, MERCADO VAN), each with a name,
-  condition %, and gears G1–G5.
-- **Combat** — 5 weapons with ammo and a weapon wheel, muzzle flash,
-  and a standoff side job to clear out.
-- **Characters with portraits and dialog** — Mara Solis, Jax, and Lucía
-  Ortega open every job with a line.
-- **3 named radio stations** — WAVE 88.1 (sunset synth), RADIO SOL 101.9
-  (latin pop), FLAMINGO FM 88.1 (funk/disco), each with its own tracks and
-  procedural WebAudio music, plus engine hum and sirens.
-- **HUD with circular minimap** — cash, health, armor, wanted stars,
-  REP bar and rank, clock (FRI 17:24 → days pass as you play), mission
-  panel, Solmar PD response list, speedometer, weapon wheel, radio widget.
-- **Shops, respray, safehouse** — buy ammo and armor, eat to heal, respray
-  your car to lose a star, save at Mara's Safehouse.
-- **Save system** — autosave after every completed job, manual save at the
-  safehouse (localStorage).
-- **Day / sunset / night lighting** with neon, shadows, and a drifting sky.
+## Play it
 
-## Screenshots
+```sh
+node serve.ts   # then open http://localhost:8080
+```
 
-`1-cover-chase.jpg` is the cover: a sunset chase with the helicopter,
-wanted 4, the response list, a mission, the radio, and a dialog in one
-frame. Then on-foot, the Big Score, and the full-city map.
-
-## Tech
-
-- Three.js r149 (vendored as `game/vendor/three.min.js`), classic
-  `<script>` tags, no modules, no bundler, no CDN.
-- Deterministic world (seeded RNG, default seed 1337; `?seed=N` overrides).
-- Staging presets for screenshots: `game/index.html?scene=cover`,
-  `?scene=onfoot`, `?scene=mission`, `?scene=map`, `?scene=night`,
-  `?scene=title`.
-- Source split by job: `engine` (loop/camera/RNG), `city` (world/traffic/
-  peds), `player` + `vehicles` (on-foot/driving/combat), `police`
-  (wanted/heli), `missions` + `dialog` (story), `hud` + `radio` + `map` +
-  `shops` + `audio` + `save` (presentation), `main` (bootstrap).
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+or open `game/index.html` directly. Screenshots: `screenshots/`
+(cover first). Entry built with the make.fun kit — see `main.ts`.
