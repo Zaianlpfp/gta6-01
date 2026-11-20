@@ -194,7 +194,9 @@ else if(SB.vehicles&&SB.vehicles.update)SB.vehicles.update(h);}
 if(SB.input&&SB.input.mouse&&SB.input.mouse.down&&P._cool<=0){
 P.fire();P._cool=WEAPONS[P.weapon].rate;}
 if(SB.vehicles&&SB.vehicles._trafficTick)SB.vehicles._trafficTick(D);
-if(SB.state.preset==='cover'&&!SB._b2traf&&SB.vehicles&&SB.vehicles.spawnTraffic){
+if((SB.state.preset==='cover'||SB.state.preset==='onfoot'||SB.state.preset==='mission')&&!SB._b2traf&&SB.vehicles&&SB.vehicles.spawnTraffic){
+// r10 integrator: traffic hanya spawn di cover (r9) -> jalan onfoot/mission
+// kosong, pixel-diff ~0. Sekarang spawn juga di onfoot/mission.
 SB._b2traf=true;SB.vehicles.spawnTraffic(24);}
 if(P.health<=0&&!P._wasted){P._wasted=true;
 if(SB.police&&SB.police.wasted)SB.police.wasted();}};
