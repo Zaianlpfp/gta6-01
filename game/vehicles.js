@@ -1,158 +1,111 @@
+'use strict';
+/* vehicles.js — VENTO STRADA (mobil pink pemain), mobil parkir, gear, tabrakan
+   roadblock (B2, r5). Kontrak: game/API.md §3. Tanpa RNG/jam dinding.
+   Pakai ulang SB.city.heroCar/heroPed — JANGAN duplikat mesh hero. */
 (function () {
-  'use strict';
+  var SB = window.SB;
+  if (!SB || !SB.engine || !SB.engine.hero) return;
+  var hero = function () { return SB.engine.hero; };
+  var now = function () { return SB.engine.simTime || 0; };
+  var clamp = function (v, a, b) { return v < a ? a : (v > b ? b : v); };
 
-  var SB = window.SB = window.SB || {};
-  var V = SB.vehicles = SB.vehicles || {};
-  var _spawned = false;
-
-  var NAMES = {
-    sport: 'VENTO STRADA', muscle: 'SOLMAR GT', sedan: 'PALMERA LX',
-    taxi: 'SOLMAR CAB', truck: 'BAYLINE HAULER', van: 'MERCADO VAN'
+  var V = {
+    list: [],
+    hero: null,
+    _crashT: -99
   };
-  var SPECS = {
-    sport: { topSpeed: 55, accel: 14 },
-    muscle: { topSpeed: 48, accel: 12 },
-    sedan: { topSpeed: 42, accel: 10 },
-    taxi: { topSpeed: 42, accel: 10 },
-    truck: { topSpeed: 34, accel: 7 },
-    van: { topSpeed: 38, accel: 9 }
-  };
-  var PALETTE = [0xd83a3a, 0x3a6ad8, 0xd8d83a, 0x3ad83a, 0xff5a8a, 0xff8c42, 0xffffff, 0x2a2a2a, 0x7a3ad8];
-  V.SPECS = SPECS;
+  SB.vehicles = V;
 
-  V.create = function (kind, x, z, heading, opts) {
-    opts = opts || {};
-    if (!NAMES[kind]) kind = 'sedan';
-    var spec = SPECS[kind];
-    var color = (opts.color !== undefined) ? opts.color
-      : PALETTE[Math.floor(SB.rng() * PALETTE.length)];
-    var group = SB.city.makeCarMesh(kind, color);
-    group.position.set(x, 0, z);
-    group.rotation.y = heading || 0;
-    SB.world.scene.add(group);
-    var v = {
-      id: 'veh-' + (SB.world.vehicles.length + 1),
-      name: opts.name || NAMES[kind], kind: kind,
-      condition: (opts.condition !== undefined ? opts.condition : 100),
-      group: group, pos: group.position, heading: heading || 0, speed: 0,
-      topSpeed: spec.topSpeed, accel: spec.accel, color: color,
-      taken: false, stalled: false
-    };
-    SB.world.vehicles.push(v);
+  V.gear = function (kmh) {
+    if (kmh < 0) return 'R';
+    if (kmh < 0.5) return 'N';
+    if (kmh < 25) return 'G1';
+    if (kmh < 55) return 'G2';
+    if (kmh < 90) return 'G3';
+    if (kmh < 130) return 'G4';
+    return 'G5';
+  };
+  V.setSpeedKmh = function (v) {
+    hero().speedKmh = v;
+    SB.state.speedKmh = v;
     return v;
   };
 
-  V.spawnParked = function () {
-    if (_spawned) return SB.world.vehicles;
-    _spawned = true;
-    var list = (SB.world.spawns && SB.world.spawns.vehicles) || [];
-    for (var i = 0; i < list.length; i++) {
-      var s = list[i];
-      V.create(s.kind, s.x, s.z, s.heading, { name: s.name });
+  function rebuildList() {
+    var h = hero();
+    h.name = 'VENTO STRADA';
+    if (h.cond == null) h.cond = 100;
+    V.hero = h;
+    var list = [{ x: h.x, z: h.z, heading: h.heading, name: 'VENTO STRADA',
+      cond: h.cond, isHero: true, group: SB.city ? SB.city.heroCar : null }];
+    var parked = (SB.city && SB.city.parked) || [];
+    var names = ['OCEANIC GT', 'PALMETTO', 'SANCHEZ', 'TAXI SOL', 'BURRITO', 'COMET'];
+    for (var i = 0; i < parked.length; i++) {
+      var p = parked[i];
+      /* parked = Group THREE langsung: posisi di group.position */
+      var px = (p.x != null) ? p.x : (p.position ? p.position.x : 0);
+      var pz = (p.z != null) ? p.z : (p.position ? p.position.z : 0);
+      var ph = (p.heading != null) ? p.heading : (p.rotation ? p.rotation.y : 0);
+      list.push({ x: px, z: pz, heading: ph,
+        name: names[i % names.length], cond: 55 + ((i * 7) % 45),
+        isHero: false, parked: true, group: (p.isGroup ? p : (p.group || null)) });
     }
-    return SB.world.vehicles;
-  };
+    V.list = list;
+  }
 
-  V.nearest = function (x, z, maxD) {
-    var best = null, bestD = maxD * maxD;
-    var list = SB.world.vehicles;
-    for (var i = 0; i < list.length; i++) {
-      var dx = list[i].pos.x - x, dz = list[i].pos.z - z;
-      var d2 = dx * dx + dz * dz;
-      if (d2 < bestD) { bestD = d2; best = list[i]; }
+  V.nearest = function (x, z) {
+    var best = null, bestD = 1e9, i, v, dx, dz, d;
+    for (i = 0; i < V.list.length; i++) {
+      v = V.list[i];
+      /* posisi mobil hero hanya ikut hero saat dikendarai; saat jalan kaki
+         mobil tetap di tempat turun (jangan jarak 0 terus-menerus). */
+      if (v.isHero && hero().mode === 'car') { v.x = hero().x; v.z = hero().z; v.heading = hero().heading; }
+      dx = v.x - x; dz = v.z - z;
+      d = Math.sqrt(dx * dx + dz * dz);
+      if (d < bestD) { bestD = d; best = v; }
     }
+    if (!best || bestD > 6) return null;
+    best.dist = bestD;
     return best;
   };
 
-  V.steal = function (v) {
-    if (!v) return null;
-    v.taken = true;
-    SB.addHeat(15);
-    SB.emit('vehicle-stolen', {
-      vehicle: { id: v.id, name: v.name, kind: v.kind }, heat: SB.state.heat
-    });
-    return v;
-  };
-
-  function gearFor(v) {
-    if (v.speed < -0.5) return 'R';
-    if (v.speed < 0.5) return 'N';
-    var f = Math.abs(v.speed) / v.topSpeed;
-    return 'G' + (f < 0.2 ? 1 : f < 0.4 ? 2 : f < 0.6 ? 3 : f < 0.8 ? 4 : 5);
-  }
-
-  V.update = function (dt) {
-    var p = SB.world.player;
-    if (!p || p.onFoot || !p.vehicle) return;
-    var v = p.vehicle;
-    if (v.condition <= 0) {
-      v.speed = 0;
-      if (!v.stalled) {
-        v.stalled = true;
-        SB.emit('vehicle-stalled', { vehicle: { id: v.id, name: v.name, kind: v.kind } });
-      }
-    } else {
-      var ax = SB.input.axis();
-      var brake = SB.input.isDown('Space');
-      if (ax.y > 0) v.speed += v.accel * dt;
-      else if (ax.y < 0) v.speed -= (v.speed > 0.5 ? 30 : 8) * dt;
-      v.speed -= v.speed * 0.12 * dt;
-      if (brake) v.speed -= v.speed * 2.5 * dt;
-      if (Math.abs(v.speed) < 0.05 && ax.y === 0) v.speed = 0;
-      if (v.speed > v.topSpeed) v.speed = v.topSpeed;
-      if (v.speed < -12) v.speed = -12;
-
-      var spdF = Math.max(-1, Math.min(1, v.speed / 10));
-      v.heading -= ax.x * 1.9 * spdF * (brake ? 1.5 : 1) * dt;
-      var f = SB.forwardOf(v.heading);
-      var nx = v.pos.x + f.x * v.speed * dt;
-      var nz = v.pos.z + f.z * v.speed * dt;
-      var hit = SB.isBlocked(nx, nz, 1.3);
-      if (!hit) {
-        var list = SB.world.vehicles;
-        for (var i = 0; i < list.length; i++) {
-          var o = list[i];
-          if (o === v) continue;
-          var ox = nx - o.pos.x, oz = nz - o.pos.z;
-          if (ox * ox + oz * oz < 3.1 * 3.1) { hit = true; break; }
-        }
-      }
-      if (hit) {
-        var impact = Math.abs(v.speed);
-        if (impact > 4) {
-          v.condition = Math.max(0, v.condition - Math.round(impact * 0.5));
-          SB.emit('vehicle-crash', {
-            vehicle: { id: v.id, name: v.name, kind: v.kind },
-            impact: Math.round(impact * 10) / 10
-          });
-        }
-        v.speed *= -0.25;
-      } else {
-        v.pos.x = nx;
-        v.pos.z = nz;
-
-        if (v._bumpCd === undefined) v._bumpCd = 0;
-        v._bumpCd -= dt;
-        var tr = SB.world.traffic;
-        for (var j = 0; j < tr.length; j++) {
-          var t = tr[j];
-          var tx = v.pos.x - t.group.position.x, tz = v.pos.z - t.group.position.z;
-          if (tx * tx + tz * tz < 3.2 * 3.2 && v._bumpCd <= 0) {
-            t.s += (t.dir > 0 ? 1 : -1) * 2.5;
-            v.speed *= 0.7;
-            if (v.condition > 0) v.condition = Math.max(0, v.condition - 1);
-            v._bumpCd = 0.5;
-          }
-        }
+  /* Tabrakan roadblock: laju tinggi + dekat cruiser roadblock -> hantam. */
+  V.tick = function (dt) {
+    var h = hero();
+    if (h.mode !== 'car') return;
+    var sp = h.speedKmh || 0;
+    if (sp < 40) return;
+    if (!SB.police || !SB.police.roadblocks) return;
+    if (now() - V._crashT < 2) return;
+    var rbs = SB.police.roadblocks, i, rb, dx, dz, d;
+    for (i = 0; i < rbs.length; i++) {
+      rb = rbs[i];
+      if (!rb || rb.visible === false) continue;
+      dx = rb.x - h.x; dz = rb.z - h.z;
+      d = Math.sqrt(dx * dx + dz * dz);
+      if (d < 4) {
+        V._crashT = now();
+        h.speedKmh = sp * 0.35;
+        SB.state.speedKmh = h.speedKmh;
+        h.cond = clamp((h.cond == null ? 100 : h.cond) - 10, 0, 100);
+        if (SB.police.addHeat) SB.police.addHeat(5);
+        break;
       }
     }
-    v.group.position.set(v.pos.x, 0, v.pos.z);
-    v.group.rotation.y = v.heading;
-    p.pos.set(v.pos.x, 0, v.pos.z);
-    p.heading = v.heading;
-    SB.state.speedKmh = Math.round(Math.abs(v.speed) * 3.6 * 10) / 10;
-    SB.state.gear = gearFor(v);
-    SB.state.vehicle = { id: v.id, name: v.name, kind: v.kind, condition: Math.round(v.condition) };
   };
 
+  /* ---- wrap setPreset berantai (vehicles) ---- */
+  if (!SB._b2vehPreset && SB.engine.setPreset) {
+    SB._b2vehPreset = true;
+    var origPreset = SB.engine.setPreset;
+    SB.engine.setPreset = function (name) {
+      var r = origPreset.call(SB.engine, name);
+      var h = hero();
+      h.name = 'VENTO STRADA';
+      h.cond = 100;
+      rebuildList();
+      return r;
+    };
+  }
+  rebuildList();
 })();

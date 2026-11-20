@@ -1,9 +1,23 @@
-html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #040810; }
-body { font-family: Arial, Helvetica, sans-serif; color: #fff; }
-#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-#sb-hud { user-select: none; }
-#sb-hud .panel { box-shadow: 0 2px 10px rgba(0, 0, 0, .45); }
-#sb-dialog img { border-radius: 50%; }
-#sb-map-cv { background: #0d1a2e; }
-#sb-shop button:disabled { opacity: .45; cursor: default; }
-::selection { background: #ff2a7a; color: #fff; }
+/* Solmar Bay — page shell. HUD/map/dialog styling is injected by hud.js/map.js. */
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0714;
+}
+body { font-family: 'Segoe UI', system-ui, sans-serif; }
+#game-canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  background: #1a0f2e;
+}
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+#hud button, #hud input { pointer-events: auto; }

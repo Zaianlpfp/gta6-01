@@ -1,148 +1,148 @@
+// dialog.js — character dialog + portraits (B3, r5, fresh from API.md r5).
+// #dlg sits BOTTOM-LEFT (weapon wheel is bottom-right — never overlap).
+// say() is INSTANT, no pause (staging). show() is typewriter + pauses game.
 (function () {
   'use strict';
-  var SB = window.SB = window.SB || {};
-  var D = SB.dialog = SB.dialog || {};
-
-  D.CHARACTERS = {
-    MARA: { name: 'MARA SOLIS', role: 'FIXER \u2014 SOLMAR BAY', portrait: 'assets/mara.jpg' },
-    JAX: { name: 'JAX', role: 'GARAGE \u2014 CHOP SHOP', portrait: 'assets/jax.jpg' },
-    LUCIA: { name: 'LUC\u00cdA ORTEGA', role: 'GETAWAY DRIVER', portrait: 'assets/lucia.jpg' }
+  var SB = window.SB;
+  var WHO = {
+    jax: { name: 'JAX', role: 'MECHANIC', img: 'jax.jpg' },
+    lucia: { name: 'LUCIA ORTEGA', role: 'GETAWAY DRIVER', img: 'lucia.jpg' },
+    mara: { name: 'MARA SOLIS', role: 'FIXER', img: 'mara.jpg' }
+  };
+  var SCENES = {
+    'm1-start': { who: 'jax', lines: [
+      'Yo, fresh meat. Mara says you can drive — prove it.',
+      'Faro Market, Old Mercado. Pick up the package, no detours.',
+      'Cops sniff around the stalls at night. Keep it smooth.' ] },
+    'm1-mid': { who: 'lucia', lines: [
+      'Package secured. Nice and quiet — I like that.',
+      'Saltjack Row next. Drop it, get paid, don\u2019t look back.' ] },
+    'm1-end': { who: 'mara', lines: [
+      'First fare, clean delivery. You\u2019re on the board now.',
+      'Five hundred, and my word travels fast in Solmar.',
+      'Stick around. The real jobs pay a lot more than this.' ] },
+    'm1-fail': { who: 'mara', lines: [ 'Clock ran out. The client walked. Come back when you\u2019re serious.' ] },
+    'm2-start': { who: 'mara', lines: [
+      'The Saltjacks moved into Faro Market. My market.',
+      'Drive them out. All four. Then we talk about the package.' ] },
+    'm2-end': { who: 'mara', lines: [
+      'Market\u2019s mine again. That\u2019s how you send a message.',
+      'Eight hundred. The package is yours — don\u2019t drop it.' ] },
+    'm2-fail': { who: 'mara', lines: [ 'They\u2019re still standing in my market. Fix that.' ] },
+    'm3-start': { who: 'jax', lines: [
+      'Comet GT, parked on Deco Row. Keys? We don\u2019t need keys.',
+      'Bring her to me in one piece and she\u2019s worth eighteen hundred.' ] },
+    'm3-end': { who: 'jax', lines: [ 'Sweet ride. She purrs like she was born for this.' ] },
+    'm4-start': { who: 'lucia', lines: [
+      'Night run, Neon Mile. Fast, dark, no headlights till the last mile.',
+      'I\u2019ll be your wheel if it goes loud. It won\u2019t go loud.' ] },
+    'm4-end': { who: 'lucia', lines: [ 'Clean drop. You drive like you\u2019ve done this before.' ] },
+    'm5-start': { who: 'jax', lines: [ 'Chop shop needs a fresh donor. Quiet streets, quick hands.' ] },
+    'm5-end': { who: 'jax', lines: [ 'Stripped and sold before sunrise. Beautiful.' ] },
+    'm6-start': { who: 'mara', lines: [ 'Bayline Docks, midnight. The contact hates waiting more than cops.' ] },
+    'm6-end': { who: 'mara', lines: [ 'Harbor lights, clean handoff. You\u2019re moving up.' ] },
+    'm7-start': { who: 'mara', lines: [ 'Heat\u2019s on you now. Lose them, then vanish at the safehouse.' ] },
+    'm7-end': { who: 'mara', lines: [ 'Ghost. That\u2019s the only way to survive this city.' ] },
+    'm8-start': { who: 'lucia', lines: [
+      'Solmar National Bank. The big score. Everything we built leads here.',
+      'In, out, gone. I\u2019ll have the engine running.' ] },
+    'm8-end': { who: 'lucia', lines: [ 'Five thousand. We just robbed the whole damn bay.' ] }
   };
 
-  D.SCRIPTS = {
-    'first-fare': { speaker: 'MARA', lines: [
-      'New in town, huh? Everyone starts somewhere. Take the cab, pick up my fare at Hotel Palmera.',
-      'Drop them at the Marina, no drama. Do it clean and there is more where that came from.' ] },
-    'the-package': { speaker: 'MARA', lines: [
-      'A package needs legs, and yours are the cheapest in Solmar. Mercado to the Marina docks.',
-      'Do not open it. Do not stop for anyone. The safehouse is yours after.' ] },
-    'hot-wheels': { speaker: 'JAX', lines: [
-      'Mara says you got hands. Prove it \u2014 there is a pink VENTO STRADA parked on Solmar Ave.',
-      'Lift it quiet, bring it to my garage. No scratches, or you pay for the paint.' ] },
-    'night-run': { speaker: 'LUCIA', lines: [
-      'You ever raced the Neon Mile at night? Three checkpoints, no brakes, no cops invited.',
-      'Keep up with me and the purse is yours. Fall behind and you walk home.' ] },
-    'chop-shop': { speaker: 'JAX', lines: [
-      'I need a SOLMAR GT, muscle, Deco Row. The owner will not miss it till morning.',
-      'Bring it in one piece and I will make it worth your while. Chop price, cash, tonight.' ] },
-    'harbor-lights': { speaker: 'LUCIA', lines: [
-      'The crew is waiting at Pelican Marina. We move together, we get paid together.',
-      'Escort us to Bayline Docks. If the cops show, you drive. I shoot. Clear?' ] },
-    'heat': { speaker: 'MARA', lines: [
-      'The PD thinks they own these streets. Time to remind them who really runs Solmar.',
-      'Get to four stars, then vanish. Lose them all and meet me at the safehouse.' ] },
-    'big-score': { speaker: 'LUCIA', lines: [
-      'Solmar National Bank. One vault, one shot, and we walk out rich or not at all.',
-      'Grab the cash, lose the cops, bring it home to me. Do not get cute out there.' ] }
-  };
+  var D = { base: 'assets/', _el: null, _img: null, _name: null, _role: null,
+    _text: null, _lines: [], _idx: 0, _timer: null, _typing: false, _who: 'jax' };
 
-  var box = null, imgEl = null, nameEl = null, roleEl = null, textEl = null, hintEl = null;
-  var lines = [], li = 0, isActive = false, useHud = false;
-  var curName = '', curRole = '', curPortrait = '';
-  function hudReady() {
-    return !!(SB.hud && SB.hud.showDialog && SB.hud.hideDialog && document.getElementById('sb-hud'));
-  }
-  function renderHudLine() {
-    SB.hud.showDialog({ name: curName, role: curRole, portrait: curPortrait, lines: [lines[li]] });
-  }
-
-  function buildBox() {
-    if (box) return;
-    box = document.createElement('div');
-    box.id = 'sb-dialog-fallback';
-    box.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
-      'width:min(640px,92vw);display:none;z-index:40;' +
-      'background:rgba(12,10,20,0.92);border:2px solid #ffb347;border-radius:12px;' +
-      'padding:14px 16px;color:#fff;font-family:Arial,sans-serif;cursor:pointer;' +
-      'box-shadow:0 8px 32px rgba(0,0,0,0.6);';
-    var wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex;gap:14px;align-items:flex-start;';
-    imgEl = document.createElement('img');
-    imgEl.alt = '';
-    imgEl.style.cssText = 'width:96px;height:96px;object-fit:cover;border-radius:8px;' +
-      'border:2px solid #ffb347;flex:0 0 auto;background:#333;';
-    var col = document.createElement('div');
-    col.style.cssText = 'flex:1;min-width:0;';
-    nameEl = document.createElement('div');
-    nameEl.style.cssText = 'font-weight:bold;font-size:17px;color:#ffb347;letter-spacing:1px;';
-    roleEl = document.createElement('div');
-    roleEl.style.cssText = 'font-size:11px;color:#9fb4d8;letter-spacing:2px;margin:2px 0 8px;';
-    textEl = document.createElement('div');
-    textEl.style.cssText = 'font-size:15px;line-height:1.45;';
-    hintEl = document.createElement('div');
-    hintEl.style.cssText = 'text-align:right;font-size:11px;color:#9fb4d8;margin-top:8px;';
-    hintEl.textContent = 'E / CLICK \u25b8';
-    col.appendChild(nameEl); col.appendChild(roleEl); col.appendChild(textEl); col.appendChild(hintEl);
-    wrap.appendChild(imgEl); wrap.appendChild(col);
-    box.appendChild(wrap);
-    document.body.appendChild(box);
-    box.addEventListener('click', function () { D.next(); });
-  }
-
-  D.show = function (opts) {
-    opts = opts || {};
-    lines = opts.lines || [];
-    li = 0;
-    if (!lines.length) return false;
-    curName = opts.name || '';
-    curRole = opts.role || '';
-    curPortrait = opts.portrait || '';
-    if (hudReady()) {
-      useHud = true;
-      renderHudLine();
-    } else {
-      useHud = false;
-      buildBox();
-      nameEl.textContent = curName;
-      roleEl.textContent = curRole;
-      imgEl.src = curPortrait;
-      textEl.textContent = lines[0];
-      box.style.display = 'block';
+  function el(id) { return document.getElementById(id); }
+  function ensure() {
+    if (D._el) return D._el;
+    var d = el('dlg');
+    if (!d) {
+      d = document.createElement('div');
+      d.id = 'dlg';
+      document.body.appendChild(d);
     }
-    isActive = true;
-    SB.setPaused(true);
+    d.style.cssText = 'position:fixed;left:16px;bottom:16px;z-index:30;display:flex;' +
+      'gap:10px;align-items:flex-start;max-width:520px;background:rgba(10,10,18,.82);' +
+      'border-left:3px solid #ff2a5e;color:#fff;padding:10px 12px;border-radius:6px;' +
+      'font-family:Arial,sans-serif;';
+    var img = d.querySelector('img');
+    if (!img) { img = document.createElement('img'); img.alt = ''; d.appendChild(img); }
+    img.style.cssText = 'width:64px;height:128px;object-fit:cover;border-radius:4px;flex:none;';
+    var box = d.querySelector('.dlg-box');
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'dlg-box';
+      box.innerHTML = '<div class="dlg-name" style="font-weight:bold;color:#ffb347;font-size:14px"></div>' +
+        '<div class="dlg-role" style="font-size:11px;color:#9fb4d8;letter-spacing:1px"></div>' +
+        '<div class="dlg-text" style="font-size:14px;line-height:1.45;margin-top:4px"></div>';
+      d.appendChild(box);
+    }
+    D._el = d; D._img = img;
+    D._name = box.querySelector('.dlg-name'); D._role = box.querySelector('.dlg-role');
+    D._text = box.querySelector('.dlg-text');
+    return d;
+  }
+  function paint(who, text) {
+    var w = WHO[who] || WHO.jax;
+    ensure();
+    D._who = who;
+    D._img.src = D.base + w.img;
+    D._name.textContent = w.name;
+    D._role.textContent = w.role;
+    D._text.textContent = text;
+    D._el.style.display = 'flex';
+  }
+  function setPaused(v) { if (SB.state) SB.state.paused = !!v; }
+  function stopType() { if (D._timer) { clearInterval(D._timer); D._timer = null; } D._typing = false; }
+
+  // Instant, no pause — staging path (B5).
+  D.say = function (text, who) {
+    stopType();
+    paint(who || D._who || 'jax', text || '');
     return true;
   };
-
-  D.next = function () {
-    if (!isActive) return;
-    li++;
-    if (li >= lines.length) { D.hide(); return; }
-    if (useHud) renderHudLine();
-    else textEl.textContent = lines[li];
+  // Typewriter + pause — live path.
+  D.show = function (who, text) {
+    var lines = Array.isArray(text) ? text.slice() : String(text || '').split('\n');
+    D._lines = lines; D._idx = 0;
+    setPaused(true);
+    D._typeLine(who, lines[0] || '');
+    return true;
   };
-
-  D.hide = function () {
-    if (!isActive) return;
-    isActive = false;
-    if (useHud && SB.hud) SB.hud.hideDialog();
-    else if (box) box.style.display = 'none';
-    useHud = false;
-    if (!SB.map || !SB.map.isOpen()) SB.setPaused(false);
+  D._typeLine = function (who, text) {
+    stopType();
+    paint(who, text);
+    D._typing = true;
+    var i = 0;
+    D._text.textContent = '';
+    D._timer = setInterval(function () {
+      i += 2;
+      D._text.textContent = text.slice(0, i);
+      if (i >= text.length) stopType();
+    }, 18);
   };
-
-  D.active = function () { return isActive; };
-
-  D.showJob = function (job) {
-    var script = D.SCRIPTS[job.id];
-    if (!script) return false;
-    var ch = D.CHARACTERS[script.speaker] || D.CHARACTERS.MARA;
-    return D.show({ name: ch.name, role: ch.role, portrait: ch.portrait, lines: script.lines });
+  // Advance one line; completes typing first, then next line, then closes.
+  D.advance = function () {
+    if (D._typing) { stopType(); D._text.textContent = D._lines[D._idx] || ''; return true; }
+    D._idx++;
+    if (D._idx < D._lines.length) { D._typeLine(D._who, D._lines[D._idx]); return true; }
+    D.finish();
+    return false;
   };
+  D.finish = function () {
+    stopType();
+    setPaused(false);
+    if (D._el) D._el.style.display = 'none';
+  };
+  // Instant first line of a scene; advance() walks the rest.
+  D.sayScene = function (id) {
+    var s = SCENES[id];
+    if (!s) return false;
+    D._lines = s.lines.slice(); D._idx = 0;
+    D.say(s.lines[0], s.who);
+    return true;
+  };
+  D.scene = function (id) { return SCENES[id] || null; };
 
-  window.addEventListener('keydown', function (e) {
-    if (!isActive) return;
-    if (e.code === 'KeyE' || e.code === 'Enter' || e.code === 'Space') {
-      e.preventDefault();
-      e.stopPropagation();
-      D.next();
-    }
-  }, true);
-
-  SB.on('scene', function (d) {
-    if (d.name === 'mission' && SB.missions && SB.missions.JOBS) {
-      var job = SB.missions.jobById ? SB.missions.jobById('big-score') : null;
-      if (job) D.showJob(job);
-    }
-  });
+  SB.dialog = D;
 })();

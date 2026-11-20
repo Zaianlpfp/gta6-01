@@ -1,311 +1,279 @@
+'use strict';
+/* player.js — hero jalan kaki + kendaraan, cash/REP, kontrol, combat (B2, r5).
+   Kontrak: game/API.md §3. Tulis segar dari spesifikasi; tanpa RNG/jam dinding. */
 (function () {
-  'use strict';
-
-  var SB = window.SB = window.SB || {};
-  var P = SB.player = SB.player || {};
-  var WALK_SPEED = 4, RUN_SPEED = 7;
-  var _prev = {};
-  var _registered = false;
-  var _sceneHooked = false;
-  var _lastShot = -10;
-  var _flash = null, _flashT = 0;
-
-  function edge(code) {
-    var down = SB.input.isDown(code);
-    var was = !!_prev[code];
-    _prev[code] = down;
-    return down && !was;
-  }
-  window.addEventListener('blur', function () { _prev = {}; });
-
-  function angLerp(a, b, t) {
-    var d = b - a;
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    return a + d * Math.min(1, t);
-  }
-
-  var C = SB.combat = SB.combat || {};
-  C.ORDER = ['fists', 'pistol', 'smg', 'shotgun', 'rifle'];
-  C.MAG = { pistol: 12, smg: 32, shotgun: 6, rifle: 30 };
-  C.RATE = { fists: 0.4, pistol: 0.25, smg: 0.09, shotgun: 0.8, rifle: 0.12 };
-  Object.defineProperty(C, 'weapons', { get: function () { return SB.state.weapons; } });
-
-  function aimDir() {
-    var p = SB.world.player;
-    var from = { x: p.pos.x, y: p.pos.y + 1.3, z: p.pos.z };
-    var cam = SB.world.camera;
-    if (!cam) return { x: -Math.sin(p.heading), y: 0, z: -Math.cos(p.heading) };
-    var mx = SB.input.mouse.x, my = SB.input.mouse.y;
-    var nx = 0, ny = 0;
-    if (mx !== 0 || my !== 0) {
-      nx = (mx / window.innerWidth) * 2 - 1;
-      ny = -((my / window.innerHeight) * 2 - 1);
-    }
-    var rc = new THREE.Raycaster();
-    rc.setFromCamera({ x: nx, y: ny }, cam);
-    var plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1);
-    var pt = new THREE.Vector3();
-    if (rc.ray.intersectPlane(plane, pt)) {
-      var dx = pt.x - from.x, dy = 1 - from.y, dz = pt.z - from.z;
-      var l = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-      return { x: dx / l, y: dy / l, z: dz / l };
-    }
-    var d = new THREE.Vector3();
-    cam.getWorldDirection(d);
-    return { x: d.x, y: 0, z: d.z };
-  }
-
-  function showFlash(from, dir) {
-    if (!_flash) {
-      _flash = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 0.7),
-        new THREE.MeshBasicMaterial({ color: 0xffe08a }));
-      SB.world.scene.add(_flash);
-    }
-    _flash.position.set(from.x + dir.x * 0.9, from.y + dir.y * 0.9, from.z + dir.z * 0.9);
-    _flash.visible = true;
-    _flashT = 0.06;
-  }
-
-  C.selectWeapon = function (id) {
-    if (C.ORDER.indexOf(id) < 0) return false;
-    if (id === 'rifle' && SB.state.weapons.rifle.locked) {
-      SB.emit('weapon-locked', { weapon: 'rifle' });
-      return false;
-    }
-    SB.state.weapon = id;
-    SB.emit('weapon-change', { weapon: id });
-    return true;
+  var SB = window.SB;
+  if (!SB || !SB.engine || !SB.engine.hero) return;
+  var hero = function () { return SB.engine.hero; };
+  var now = function () { return SB.engine.simTime || 0; };
+  var clamp = function (v, a, b) { return v < a ? a : (v > b ? b : v); };
+  var normAng = function (a) {
+    while (a > Math.PI) a -= Math.PI * 2;
+    while (a < -Math.PI) a += Math.PI * 2;
+    return a;
   };
 
-  C.shoot = function () {
-    var p = SB.world.player;
-    if (!p || !SB.state.started) return false;
-    var id = SB.state.weapon;
-    if (SB.state.simTime - _lastShot < C.RATE[id]) return false;
-    var w = SB.state.weapons[id];
-    if (!w) return false;
-    if (id !== 'fists') {
-      if (w.ammo <= 0) {
-        if (w.reserve > 0) C.reload();
-        else SB.emit('dry-fire', { weapon: id });
-        return false;
-      }
-      w.ammo -= 1;
+  var DEFS = [
+    { name: 'FISTS',   mag: 0,  cap: 0,  reserve: 0,   dmg: 12, cd: 0.45, range: 2.5, locked: false },
+    { name: 'PISTOL',  mag: 12, cap: 12, reserve: 48,  dmg: 32, cd: 0.25, range: 45,  locked: false },
+    { name: 'SMG',     mag: 32, cap: 32, reserve: 128, dmg: 18, cd: 0.09, range: 40,  locked: false },
+    { name: 'SHOTGUN', mag: 6,  cap: 6,  reserve: 18,  dmg: 55, cd: 1.66, range: 25,  locked: false },
+    { name: 'RIFLE',   mag: 30, cap: 30, reserve: 90,  dmg: 45, cd: 0.12, range: 60,  locked: true }
+  ];
+  function freshWeapons() {
+    var out = [], i, d;
+    for (i = 0; i < DEFS.length; i++) {
+      d = DEFS[i];
+      out.push({ name: d.name, mag: d.mag, cap: d.cap, reserve: d.reserve,
+        ammo: d.mag, dmg: d.dmg, cd: d.cd, range: d.range, locked: d.locked, _last: -99 });
     }
-    _lastShot = SB.state.simTime;
-    var from = { x: p.pos.x, y: p.pos.y + 1.3, z: p.pos.z };
-    var dir = aimDir();
-    if (id !== 'fists') showFlash(from, dir);
-    SB.emit('shot', { weapon: id, from: from, dir: dir, ammo: w.ammo, reserve: w.reserve });
+    return out;
+  }
+
+  var P = {
+    x: hero().x, z: hero().z, heading: hero().heading,
+    hp: 100, armor: 0, cash: 500, rep: 0, onFoot: hero().mode === 'foot',
+    weapon: 2, weaponIdx: 1, weapons: freshWeapons(),
+    keys: new Set(), _fired: false, lastFired: -99
+  };
+  SB.player = P;
+
+  function cur() { return P.weapons[P.weaponIdx]; }
+  function syncFromHero() {
+    var h = hero();
+    P.x = h.x; P.z = h.z; P.heading = h.heading;
+    P.onFoot = h.mode === 'foot';
+    SB.state.speedKmh = h.speedKmh || 0;
+    SB.state.gear = h.mode === 'car'
+      ? (SB.vehicles ? SB.vehicles.gear(h.speedKmh || 0) : 'N') : 'N';
+    if (SB.city && SB.city.districtAt) SB.state.district = SB.city.districtAt(h.x, h.z);
+  }
+
+  P.setWeapon = function (i) {
+    i = i | 0;
+    if (i < 1 || i > P.weapons.length) return false;
+    if (P.weapons[i - 1].locked) return false;
+    P.weapon = i; P.weaponIdx = i - 1;
     return true;
   };
-
-  C.reload = function () {
-    var id = SB.state.weapon;
-    var w = SB.state.weapons[id];
-    if (!w || w.ammo === Infinity) return false;
-    var mag = C.MAG[id] || 0;
-    var need = mag - w.ammo;
+  P.reload = function () {
+    var w = cur();
+    if (w.name === 'FISTS') return false;
+    var need = w.cap - w.mag;
     if (need <= 0 || w.reserve <= 0) return false;
-    var take = Math.min(need, w.reserve);
-    w.ammo += take;
-    w.reserve -= take;
-    SB.emit('reload', { weapon: id, ammo: w.ammo, reserve: w.reserve });
+    var take = need < w.reserve ? need : w.reserve;
+    w.mag += take; w.reserve -= take; w.ammo = w.mag;
     return true;
   };
-
-  function adoptStaged(p) {
-    var v = p.vehicle;
-    var spec = (SB.vehicles && SB.vehicles.SPECS && SB.vehicles.SPECS[v.kind]) ||
-      { topSpeed: 55, accel: 14 };
-    var rec = {
-      id: v.id || 'stage-vento', name: v.name || 'VENTO STRADA', kind: v.kind || 'sport',
-      condition: (v.condition !== undefined ? v.condition : 100),
-      group: p.mesh, pos: p.mesh.position, heading: p.heading, speed: 0,
-      topSpeed: spec.topSpeed, accel: spec.accel, taken: true, stalled: false
-    };
-    SB.world.vehicles.push(rec);
-    p.vehicle = rec;
-    p.onFoot = false;
-    SB.state.vehicle = { id: rec.id, name: rec.name, kind: rec.kind, condition: rec.condition };
-    SB.state.speedKmh = 0;
-    SB.state.gear = 'N';
-  }
-
-  function hookScenePreset() {
-    if (_sceneHooked) return;
-    _sceneHooked = true;
-    SB.on('scene', function (e) {
-      if (!e || (e.name !== 'cover' && e.name !== 'mission' && e.name !== 'night')) return;
-      var p = SB.world.player;
-      if (!p || !p.onFoot) return;
-      if (!SB.vehicles || !SB.vehicles.nearest) return;
-      var v = SB.vehicles.nearest(p.pos.x, p.pos.z, 30);
-      if (v) P.enterVehicle(v, { steal: false });
-    });
-  }
-
-  P.create = function (spawn) {
-    spawn = spawn || (SB.world.spawns && SB.world.spawns.player) || { x: 0, z: 60, heading: 0 };
-    var existing = SB.world.player;
-    if (existing) {
-      if (!existing.onFoot && existing.vehicle) adoptStaged(existing);
-      else { existing.onFoot = true; existing.vehicle = null; }
-    } else {
-      var mesh = SB.city.makePedMesh(0xff5a8a, 0xc98a5a);
-      mesh.position.set(spawn.x, 0, spawn.z);
-      mesh.rotation.y = spawn.heading || 0;
-      SB.world.scene.add(mesh);
-      SB.world.player = {
-        mesh: mesh, pos: mesh.position, heading: spawn.heading || 0,
-        speed: 0, onFoot: true, vehicle: null
-      };
+  P.addCash = function (n) { P.cash += n; return P.cash; };
+  P.addRep = function (n) { P.rep += n; return P.rep; };
+  P.aimAt = function (x, z) {
+    var h = hero();
+    h.heading = Math.atan2(x - h.x, z - h.z);
+    P.heading = h.heading;
+  };
+  P.hurt = function (dmg) {
+    if (dmg <= 0 || P.hp <= 0) return;
+    var absorbed = 0;
+    if (P.armor > 0) {
+      absorbed = dmg * 0.6;
+      if (absorbed > P.armor) absorbed = P.armor;
+      P.armor -= absorbed;
     }
-    SB.setChaseTarget(SB.world.player);
-    SB.setCameraMode(SB.world.player.onFoot ? 'onfoot' : 'chase');
-    if (!_registered) { _registered = true; SB.registerUpdate(P.update); }
-    hookScenePreset();
-    return SB.world.player;
+    P.hp -= (dmg - absorbed);
+    if (P.hp < 0) P.hp = 0;
   };
 
-  P.isOnFoot = function () {
-    return !!SB.world.player && !!SB.world.player.onFoot;
-  };
-
-  P.setPosition = function (x, z, heading) {
-    var p = SB.world.player;
-    if (!p) return false;
-    if (p.vehicle) {
-      var v = p.vehicle;
-
-      if (v.pos) v.pos.set(x, 0, z);
-      if (v.group) v.group.rotation.y = heading;
-      if (v.heading !== undefined) v.heading = heading;
-    }
-    p.pos.set(x, 0, z);
-    p.heading = heading;
-    if (p.mesh) p.mesh.rotation.y = heading;
-    return true;
-  };
-
-  P.enterVehicle = function (v, opts) {
-    var p = SB.world.player;
-    if (!p || !v || !p.onFoot) return false;
-    opts = opts || {};
-    p.vehicle = v;
-    p.onFoot = false;
-    p.pos.set(v.pos.x, 0, v.pos.z);
-    p.heading = v.heading;
-    if (p.mesh) p.mesh.visible = false;
-    SB.state.vehicle = { id: v.id, name: v.name, kind: v.kind, condition: Math.round(v.condition) };
-    SB.setCameraMode('chase');
-    SB.setChaseTarget(p);
-    SB.emit('enter-vehicle', { vehicle: SB.state.vehicle });
-    return true;
-  };
-
-  P.exitVehicle = function () {
-    var p = SB.world.player;
-    if (!p || p.onFoot || !p.vehicle) return false;
-    var v = p.vehicle;
-    var rx = Math.cos(v.heading), rz = -Math.sin(v.heading);
-    var px = v.pos.x + rx * 2.6, pz = v.pos.z + rz * 2.6;
-    if (SB.isBlocked(px, pz, 0.5)) { px = v.pos.x - rx * 2.6; pz = v.pos.z - rz * 2.6; }
-    if (SB.isBlocked(px, pz, 0.5)) {
-      var f = SB.forwardOf(v.heading);
-      px = v.pos.x - f.x * 3.5; pz = v.pos.z - f.z * 3.5;
-    }
-    var c = SB.clampToBounds(px, pz);
-    p.pos.set(c.x, 0, c.z);
-    p.heading = v.heading;
-    p.vehicle = null;
-    p.onFoot = true;
-    if (p.mesh) { p.mesh.visible = true; p.mesh.rotation.y = p.heading; }
-    SB.state.vehicle = null;
-    SB.state.speedKmh = 0;
-    SB.state.gear = 'N';
-    SB.setCameraMode('onfoot');
-    SB.setChaseTarget(p);
-    SB.emit('exit-vehicle', { vehicle: { id: v.id, name: v.name, kind: v.kind } });
-    return true;
-  };
-
-  function nearestVehicle(x, z, maxD) {
-    if (SB.vehicles && SB.vehicles.nearest) return SB.vehicles.nearest(x, z, maxD);
-    var best = null, bestD = maxD * maxD;
-    var list = SB.world.vehicles;
-    for (var i = 0; i < list.length; i++) {
-      var dx = list[i].pos.x - x, dz = list[i].pos.z - z;
-      var d2 = dx * dx + dz * dz;
-      if (d2 < bestD) { bestD = d2; best = list[i]; }
-    }
-    return best;
-  }
-
-  function updateOnFoot(dt) {
-    var p = SB.world.player;
-    var ax = SB.input.axis();
-    var cam = SB.world.camera;
-    var cx = p.pos.x - cam.position.x, cz = p.pos.z - cam.position.z;
-    var cl = Math.sqrt(cx * cx + cz * cz) || 1;
-    cx /= cl; cz /= cl;
-    var mx = cx * ax.y + (-cz) * ax.x;
-    var mz = cz * ax.y + (cx) * ax.x;
-    var ml = Math.sqrt(mx * mx + mz * mz);
-    var moving = ml > 0.01;
-    var speed = (SB.input.isDown('ShiftLeft') || SB.input.isDown('ShiftRight')) ? RUN_SPEED : WALK_SPEED;
-    if (moving) {
-      mx /= ml; mz /= ml;
-      var nx = p.pos.x + mx * speed * dt;
-      var nz = p.pos.z + mz * speed * dt;
-      if (!SB.isBlocked(nx, p.pos.z, 0.5)) p.pos.x = nx;
-      if (!SB.isBlocked(p.pos.x, nz, 0.5)) p.pos.z = nz;
-      p.heading = angLerp(p.heading, SB.headingForDir(mx, mz), dt * 10);
-      p.speed = speed;
-    } else {
-      p.speed = 0;
-    }
-    if (p.mesh) {
-      p.mesh.rotation.y = p.heading;
-      p.mesh.position.y = moving ? Math.abs(Math.sin(SB.state.simTime * 10)) * 0.06 : 0;
-    }
-  }
-
-  P.update = function (dt) {
-    var p = SB.world.player;
-    if (!p) return;
-    if (_flashT > 0) {
-      _flashT -= dt;
-      if (_flashT <= 0 && _flash) _flash.visible = false;
-    }
-
-    if (edge('KeyE')) {
-      if (p.onFoot) {
-        var v = nearestVehicle(p.pos.x, p.pos.z, 4);
-        if (v) {
-          if (!v.taken && SB.vehicles && SB.vehicles.steal) SB.vehicles.steal(v);
-          P.enterVehicle(v);
-        }
-      } else {
-        P.exitVehicle();
+  function candidates() {
+    var out = [], i, p;
+    if (SB.city && SB.city.peds) {
+      for (i = 0; i < SB.city.peds.length; i++) {
+        p = SB.city.peds[i];
+        if (p && p.hp != null && p.hp > 0 && p.alive !== false) out.push(p);
       }
     }
-
-    var keys = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'];
-    for (var i = 0; i < keys.length; i++) {
-      if (edge(keys[i])) C.selectWeapon(C.ORDER[i]);
+    if (SB.police && SB.police.footCops) {
+      for (i = 0; i < SB.police.footCops.length; i++) {
+        p = SB.police.footCops[i];
+        if (p && p.hp != null && p.hp > 0 && p.alive !== false && out.indexOf(p) < 0) out.push(p);
+      }
     }
-    if (edge('KeyR')) C.reload();
-    if (SB.input.isDown('KeyF') || SB.input.mouse.down) C.shoot();
+    if (SB.police && SB.police.boss) {
+      var b = SB.police.boss;
+      if (b.hp > 0 && b.alive !== false && out.indexOf(b) < 0) out.push(b);
+    }
+    return out;
+  }
 
-    if (p.onFoot) updateOnFoot(dt);
-    else if (SB.vehicles && SB.vehicles.update) SB.vehicles.update(dt);
-
-    var d = SB.districtAt(p.pos.x, p.pos.z);
-    if (d) SB.state.location = d.name;
-    var s = SB.streetAt(p.pos.x, p.pos.z);
-    if (s) SB.state.street = s;
+  P.fire = function () {
+    var h = hero(), w = cur(), t = now();
+    if (t - w._last < w.cd) return false;
+    w._last = t;
+    if (h.mode === 'foot') {
+      if (w.name !== 'FISTS') {
+        if (w.mag <= 0) return false;
+        w.mag--; w.ammo = w.mag;
+      }
+    }
+    var pos = { x: h.x, y: 1.4, z: h.z };
+    if (SB.engine.muzzlePos) pos = SB.engine.muzzlePos();
+    if (SB.engine.burst) SB.engine.burst(pos);
+    P._fired = true; P.lastFired = t;
+    var list = candidates(), best = null, bestScore = 1e9, i, p, dx, dz, d, ang, diff, score;
+    for (i = 0; i < list.length; i++) {
+      p = list[i];
+      if (!p.userData || !(p.userData.boss || p.userData.enforcer || p.userData.cop)) continue;
+      dx = p.x - h.x; dz = p.z - h.z;
+      d = Math.sqrt(dx * dx + dz * dz);
+      if (d > w.range) continue;
+      ang = Math.atan2(dx, dz);
+      diff = Math.abs(normAng(ang - h.heading));
+      if (d > 3 && diff > 0.6) continue;
+      score = diff * 10 + d * 0.01;
+      if (score < bestScore) { bestScore = score; best = p; }
+    }
+    if (best) {
+      best.hp -= w.dmg;
+      if (best.hp <= 0) {
+        best.hp = 0; best.alive = false;
+        if (best.group) best.group.visible = false;
+        if (best.userData.boss) {
+          if (SB.missions && SB.missions.standoffDown) SB.missions.standoffDown();
+        } else if (best.userData.cop) {
+          if (SB.police && SB.police.addHeat) SB.police.addHeat(12);
+          if (SB.police && SB.police.replaceCop) SB.police.replaceCop(best);
+        }
+      }
+    }
+    return true;
   };
 
+  P.enterCar = function () {
+    var h = hero();
+    if (h.mode === 'car') { P.exitCar(); return true; }
+    var v = null;
+    if (SB.vehicles && SB.vehicles.nearest) v = SB.vehicles.nearest(h.x, h.z);
+    if (!v) return false;
+    if (!v.isHero && SB.police && SB.police.addHeat) SB.police.addHeat(10);
+    h.mode = 'car';
+    h.speedKmh = 0;
+    P.onFoot = false;
+    syncFromHero();
+    return true;
+  };
+  P.exitCar = function () {
+    var h = hero();
+    if (h.mode !== 'car') return false;
+    /* mobil hero tertinggal di posisi turun */
+    if (SB.vehicles && SB.vehicles.list && SB.vehicles.list[0]) {
+      SB.vehicles.list[0].x = h.x;
+      SB.vehicles.list[0].z = h.z;
+      SB.vehicles.list[0].heading = h.heading;
+    }
+    h.mode = 'foot';
+    h.speedKmh = 0;
+    var rx = Math.cos(h.heading), rz = -Math.sin(h.heading);
+    h.x += rx * 2.2; h.z += rz * 2.2;
+    P.onFoot = true;
+    syncFromHero();
+    return true;
+  };
+
+  /* ---- kontrol keyboard (sekali ikat) ---- */
+  function onKeyDown(e) {
+    P.keys.add(e.code);
+    if (SB.state.paused) return;
+    if (e.code === 'Space') e.preventDefault();
+    if (e.code === 'KeyE') P.enterCar();
+    else if (e.code === 'KeyR') P.reload();
+    else if (e.code >= 'Digit1' && e.code <= 'Digit5') P.setWeapon(e.code.charCodeAt(5) - 48);
+  }
+  function onKeyUp(e) { P.keys.delete(e.code); }
+  if (!SB._b2keys) {
+    SB._b2keys = true;
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+  }
+
+  /* ---- gerak per langkah (dipanggil dari wrap step) ---- */
+  function playerTick(dt) {
+    var h = hero(), k = P.keys;
+    if (h.mode === 'car') {
+      var sp = (h.speedKmh || 0) / 3.6; /* m/s */
+      var acc = 0;
+      if (k.has('KeyW')) acc = 16;
+      else if (k.has('KeyS')) acc = sp > 0.5 ? -30 : -10;
+      else acc = sp > 0.2 ? -6 : (sp < -0.2 ? 6 : -sp / Math.max(dt, 0.001));
+      if (k.has('Space')) acc = sp > 0.2 ? -40 : (sp < -0.2 ? 40 : -sp / Math.max(dt, 0.001));
+      sp += acc * dt;
+      sp = clamp(sp, -8, 55);
+      if (Math.abs(sp) < 0.05 && !k.has('KeyW') && !k.has('KeyS')) sp = 0;
+      var steer = (k.has('KeyA') ? 1 : 0) - (k.has('KeyD') ? 1 : 0);
+      if (steer !== 0 && Math.abs(sp) > 0.3) {
+        h.heading += steer * 1.6 * Math.min(1, Math.abs(sp) / 8) * dt * (sp < 0 ? -1 : 1);
+      }
+      h.speedKmh = sp * 3.6;
+    } else {
+      var turn = (k.has('KeyA') ? 1 : 0) - (k.has('KeyD') ? 1 : 0);
+      if (turn !== 0) h.heading += turn * 2.4 * dt;
+      var v = 0;
+      if (k.has('KeyW')) v = k.has('ShiftLeft') || k.has('ShiftRight') ? 9.0 : 4.2;
+      else if (k.has('KeyS')) v = -2.0;
+      if (v !== 0) {
+        h.x += Math.sin(h.heading) * v * dt;
+        h.z += Math.cos(h.heading) * v * dt;
+        h.x = clamp(h.x, -160, 160);
+        h.z = clamp(h.z, -160, 160);
+      }
+      h.speedKmh = Math.abs(v) * 3.6;
+    }
+    syncFromHero();
+  }
+
+  /* ---- wrap SB.engine.step SEKALI ---- */
+  if (!SB._b2step && SB.engine.step) {
+    SB._b2step = true;
+    var origStep = SB.engine.step;
+    SB.engine.step = function (dt) {
+      dt = dt || 1 / 60;
+      if (!SB.state.paused) {
+        playerTick(dt);
+        if (SB.vehicles && SB.vehicles.tick) SB.vehicles.tick(dt);
+        if (SB.police && SB.police.tick) SB.police.tick(dt);
+      }
+      return origStep.call(SB.engine, dt);
+    };
+  }
+
+  /* ---- wrap SB.engine.advanceSim SEKALI: missions.update tepat 1x/langkah ---- */
+  if (!SB._b2adv && SB.engine.advanceSim) {
+    SB._b2adv = true;
+    SB._b2advN = 0;
+    SB.engine.advanceSim = function (n) {
+      n = n | 0;
+      for (var i = 0; i < n; i++) {
+        SB.engine.step(1 / 60);
+        SB._b2advN++;
+        if (SB.missions && typeof SB.missions.update === 'function') SB.missions.update(1 / 60);
+      }
+      return SB.engine.frame;
+    };
+  }
+
+  /* ---- wrap setPreset berantai (player) ---- */
+  if (!SB._b2playerPreset && SB.engine.setPreset) {
+    SB._b2playerPreset = true;
+    var origPreset = SB.engine.setPreset;
+    SB.engine.setPreset = function (name) {
+      var r = origPreset.call(SB.engine, name);
+      var h = hero();
+      P.hp = 100; P.armor = 0;
+      P.weapons = freshWeapons();
+      P.weapon = 2; P.weaponIdx = 1;
+      P._fired = false;
+      syncFromHero();
+      return r;
+    };
+  }
+  syncFromHero();
 })();

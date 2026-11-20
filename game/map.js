@@ -1,154 +1,225 @@
+// map.js — peta penuh Solmar Bay (B4, r5). Tombol M.
+// r5: LEGENDA 9 item (r4 hilang) + judul di HEADER BAR di atas canvas,
+// TIDAK menimpa tile. Grid rapat tanpa ruang hitam, 9 label distrik utuh
+// (clamp dari panel jobs + geser bila menabrak marker), jobs campuran
+// DONE/ACTIVE/LOCKED, GPS objective aktif.
 (function () {
-  'use strict';
   var SB = window.SB = window.SB || {};
-  var S = SB.state, W = SB.world;
-  var JOBS_FALLBACK = [
-    { id: 'first-fare', title: 'FIRST FARE', contact: 'MARA SOLIS', payout: 500, spot: 'hotel' },
-    { id: 'the-package', title: 'THE PACKAGE', contact: 'MARA SOLIS', payout: 1200, spot: 'marina' },
-    { id: 'hot-wheels', title: 'HOT WHEELS', contact: 'MARA SOLIS', payout: 1800, spot: 'garage' },
-    { id: 'night-run', title: 'NIGHT RUN', contact: 'MARA SOLIS', payout: 2500, spot: 'neon' },
-    { id: 'chop-shop', title: 'CHOP SHOP', contact: 'MARA SOLIS', payout: 3200, spot: 'garage' },
-    { id: 'harbor-lights', title: 'HARBOR LIGHTS', contact: 'MARA SOLIS', payout: 3200, spot: 'marina' },
-    { id: 'heat', title: 'HEAT', contact: 'MARA SOLIS', payout: 4200, spot: 'police' },
-    { id: 'big-score', title: 'THE BIG SCORE', contact: 'MARA SOLIS', payout: 5000, spot: 'bank' }
+  var M = SB.map = SB.map || {};
+  M._open = false; M._zoom = 1; M._el = null; M._cv = null; M._jobs = null;
+  M.legend = [
+    { s: '◆', c: '#ffd34d', t: 'Story Contact' },
+    { s: '◆', c: '#ff3b30', t: 'Job Objective' },
+    { s: '⌂', c: '#4dff88', t: 'Safehouse' },
+    { s: '◎', c: '#ff9f1c', t: 'Weapons' },
+    { s: '✦', c: '#c77dff', t: 'Respray' },
+    { s: '⚑', c: '#ffffff', t: 'Street Race' },
+    { s: '⬢', c: '#4dc3ff', t: 'Property' },
+    { s: '+', c: '#ffffff', t: 'Hospital' },
+    { s: '★', c: '#5b8cff', t: 'Police' }
   ];
-  var LEGEND = [
-    ['★', '#ffd23f', 'Story contact'], ['◆', '#ffe14d', 'Job objective'], ['⌂', '#39d353', 'Safehouse'],
-    ['✚', '#ff5a5a', 'Hospital'], ['⚑', '#4d9fff', 'Police'], ['$', '#b57edc', 'Weapons shop'],
-    ['✦', '#ff2a7a', 'Respray'], ['🏁', '#ffffff', 'Street race'], ['♦', '#ffd23f', 'Property'],
-    ['◉', '#ff9f1c', 'Sunset tape']
-  ];
-  var ICONS = { bank: '＄', hospital: '✚', police: '⚑', hotel: 'H', garage: '⚙', safehouse: '⌂', respray: '✦', shop: '$', club: '♪' };
-  var root = null, cv = null, ctx = null, visible = false;
-  var MX0 = -560, MZ0 = -470, MX1 = 470, MZ1 = 530;
-  function px(x) { return (x - MX0) / (MX1 - MX0) * cv.width; }
-  function py(z) { return (z - MZ0) / (MZ1 - MZ0) * cv.height; }
-  function jobs() {
-    if (SB.missions && SB.missions.JOBS && SB.missions.JOBS.length) return SB.missions.JOBS;
-    return JOBS_FALLBACK;
+  var DCOL = ['#3d6b8f', '#7a4a8f', '#4a7a5c', '#8f6b3d', '#5c5c7a', '#8f4a4a', '#3d7a6b', '#6b5c8f', '#7a7a3d'];
+  M.isOpen = function () { return M._open; };
+  M.zoomIn = function () { M._zoom = Math.min(2, +(M._zoom + 0.25).toFixed(2)); M.render(); return M._zoom; };
+  M.zoomOut = function () { M._zoom = Math.max(1, +(M._zoom - 0.25).toFixed(2)); M.render(); return M._zoom; };
+  M.setZoom = function (z) { M._zoom = Math.max(1, Math.min(2, z || 1)); M.render(); return M._zoom; };
+  function districts() {
+    try { return (SB.city && SB.city.districts) || []; } catch (e) { return []; }
   }
-  var JOB_SPOT = { 'first-fare': 'hotel', 'the-package': 'marina', 'hot-wheels': 'garage', 'night-run': 'neon', 'chop-shop': 'garage', 'harbor-lights': 'marina', 'heat': 'police', 'big-score': 'bank' };
-  function missionTarget() {
-    if (SB.missions && SB.missions.active) {
-      var a = SB.missions.active();
-      var sm = SB.state.mission;
-      if (a && sm && sm.id === a.id && a.stages[sm.stage - 1] && a.stages[sm.stage - 1].target) return a.stages[sm.stage - 1].target;
-      if (a) { var j = jobs(); for (var i = 0; i < j.length; i++) { var sp = j[i].spot || JOB_SPOT[j[i].id]; if (j[i].id === a.id && sp && W.spawns.missions[sp]) return W.spawns.missions[sp]; } }
+  function bounds(ds) {
+    var b = { x0: 1e9, z0: 1e9, x1: -1e9, z1: -1e9 };
+    for (var i = 0; i < ds.length; i++) {
+      b.x0 = Math.min(b.x0, ds[i].x0); b.z0 = Math.min(b.z0, ds[i].z0);
+      b.x1 = Math.max(b.x1, ds[i].x1); b.z1 = Math.max(b.z1, ds[i].z1);
     }
-    if (S.mission) { var js = jobs(); for (var k = 0; k < js.length; k++) { var sp2 = js[k].spot || JOB_SPOT[js[k].id]; if (js[k].id === S.mission.id && sp2 && W.spawns.missions[sp2]) return W.spawns.missions[sp2]; } }
-    return null;
+    if (!isFinite(b.x0)) { b = { x0: -120, z0: -120, x1: 120, z1: 120 }; }
+    return b;
   }
-  function distTo(t) {
-    var p = W.player && W.player.pos;
-    if (!p || !t) return null;
-    return Math.round(Math.sqrt((t.x - p.x) * (t.x - p.x) + (t.z - p.z) * (t.z - p.z)));
+  // Titik ikon tetap (deterministik, tanpa RNG): pusat distrik + offset tetap.
+  function iconPts(ds, b, W, H) {
+    var sx = W / (b.x1 - b.x0), sz = H / (b.z1 - b.z0), sc = Math.min(sx, sz) * M._zoom;
+    function P(x, z) { return { x: (x - b.x0) * sc, z: (z - b.z0) * sc }; }
+    function C(i) { var d = ds[i % ds.length]; return { x: (d.x0 + d.x1) / 2, z: (d.z0 + d.z1) / 2 }; }
+    var c2 = C(2), c4 = C(4), c5 = C(5), c7 = C(7), c0 = C(0), c8 = C(8), c1 = C(1), c3 = C(3), c6 = C(6);
+    return [
+      { s: '⌂', c: '#4dff88', p: P(c2.x - 12, c2.z + 8), t: 'SAFEHOUSE' },
+      { s: '◎', c: '#ff9f1c', p: P(c4.x + 14, c4.z - 6), t: 'GUN STORE' },
+      { s: '✦', c: '#c77dff', p: P(c5.x - 8, c5.z - 10), t: 'RESPRAY' },
+      { s: '⚑', c: '#fff', p: P(c7.x + 10, c7.z + 10), t: 'RACE' },
+      { s: '⬢', c: '#4dc3ff', p: P(c0.x + 6, c0.z - 8), t: 'PROPERTY' },
+      { s: '+', c: '#fff', p: P(c8.x - 10, c8.z + 6), t: 'HOSPITAL' },
+      { s: '★', c: '#5b8cff', p: P(c1.x - 6, c1.z + 12), t: 'POLICE' },
+      { s: '$', c: '#ffd34d', p: P(c3.x + 12, c3.z + 4), t: 'BANK' },
+      { s: '⚓', c: '#4dc3ff', p: P(c6.x - 4, c6.z - 12), t: 'MARINA' }
+    ];
   }
-  function drawMap() {
-    if (!ctx) return;
-    var w = cv.width, h = cv.height;
-    ctx.fillStyle = '#0d1a2e'; ctx.fillRect(0, 0, w, h);
-    var ds = W.districts || [];
+  M._style = function () {
+    if (document.getElementById('map-css')) return;
+    var st = document.createElement('style'); st.id = 'map-css';
+    st.textContent = '#map-ov{position:fixed;inset:0;background:rgba(4,6,12,.97);z-index:50;display:none;flex-direction:column;font-family:Arial,sans-serif;color:#fff}'
+      + '#map-hd{flex:0 0 44px;display:flex;align-items:center;gap:14px;padding:0 14px;background:#0d1424;border-bottom:2px solid #ffb347}'
+      + '#map-hd h1{margin:0;font-size:19px;letter-spacing:3px;color:#ffb347}'
+      + '#map-hd .zm{color:#bbb;font-size:13px}'
+      + '#map-hd button{margin-left:auto;background:#ffb347;border:0;border-radius:5px;padding:6px 14px;font-weight:700;cursor:pointer}'
+      + '#map-bd{flex:1;position:relative;overflow:hidden}'
+      + '#map-cv{position:absolute;inset:0;width:100%;height:100%}'
+      + '#map-jobs{position:absolute;top:10px;right:10px;width:300px;max-height:calc(100% - 20px);overflow:auto;background:rgba(8,10,18,.92);border:1px solid #444;border-radius:8px;padding:10px 12px;font-size:13px}'
+      + '#map-jobs h2{margin:0 0 6px;color:#ffb347;font-size:15px;letter-spacing:2px}'
+      + '#map-jobs .jb{padding:5px 0;border-bottom:1px solid #222}'
+      + '#map-jobs .jb b{font-size:13px}'
+      + '#map-jobs .jb span{color:#aaa;font-size:12px}'
+      + '#map-jobs .DONE b{color:#4dff88}#map-jobs .ACTIVE b{color:#ffd34d}#map-jobs .LOCKED b{color:#888}'
+      + '#map-jobs .gps{margin-top:8px;padding-top:8px;border-top:1px solid #444;font-size:13px}'
+      + '#map-jobs .gps .boss{color:#ff6b6b}'
+      + '#map-leg{position:absolute;left:10px;bottom:10px;background:rgba(8,10,18,.92);border:1px solid #444;border-radius:8px;padding:8px 12px;font-size:12px}'
+      + '#map-leg h3{margin:0 0 4px;color:#ffb347;font-size:12px;letter-spacing:2px}'
+      + '#map-leg div{line-height:1.55;white-space:nowrap}';
+    document.head.appendChild(st);
+  };
+  M._build = function () {
+    M._style();
+    var ov = document.createElement('div'); ov.id = 'map-ov';
+    ov.innerHTML = '<div id="map-hd"><h1>SOLMAR BAY</h1><span class="zm"></span><span style="color:#888;font-size:12px">[M] tutup · [+]/[-] zoom</span><button id="map-close">CLOSE [M]</button></div>'
+      + '<div id="map-bd"><canvas id="map-cv"></canvas><div id="map-jobs"></div><div id="map-leg"><h3>LEGEND</h3></div></div>';
+    document.body.appendChild(ov);
+    M._el = ov; M._cv = ov.querySelector('#map-cv'); M._jobs = ov.querySelector('#map-jobs');
+    var leg = ov.querySelector('#map-leg');
+    for (var i = 0; i < M.legend.length; i++) {
+      var L = M.legend[i], d = document.createElement('div');
+      d.innerHTML = '<span style="color:' + L.c + ';font-weight:700">' + L.s + '</span> ' + L.t;
+      leg.appendChild(d);
+    }
+    ov.querySelector('#map-close').addEventListener('click', function () { M.close(); });
+    ov.querySelector('#map-hd').addEventListener('click', function (e) {
+      if (e.target && e.target.tagName === 'BUTTON') return;
+    });
+  };
+  M._jobsHtml = function () {
+    var jobs = [];
+    try { jobs = (SB.missions && SB.missions.jobs) ? SB.missions.jobs() : []; } catch (e) {}
+    var h = '<h2>JOBS</h2>';
+    if (!jobs.length) h += '<div class="jb">— belum ada job —</div>';
+    for (var i = 0; i < jobs.length; i++) {
+      var j = jobs[i];
+      h += '<div class="jb ' + j.st + '"><b>' + (j.name || ('JOB ' + (i + 1))) + ' — $' + (j.pay || 0) + ' — ' + j.st + '</b>'
+        + (j.st === 'ACTIVE' ? ' &gt;&gt;' : '') + '<br><span>' + (j.giver || '') + '</span></div>';
+    }
+    var mk = null, cur = null;
+    try { mk = SB.missions ? SB.missions.marker : null; } catch (e) {}
+    try { cur = (SB.missions && SB.missions.current) ? SB.missions.current() : null; } catch (e) {}
+    h += '<div class="gps">';
+    if (mk && mk.on) h += 'GPS: ' + (mk.label || 'OBJECTIVE') + ' (' + Math.round(mk.x) + ', ' + Math.round(mk.z) + ')<br>';
+    else h += 'GPS: no active objective<br>';
+    if (cur && cur.standoff > 0) h += '<span class="boss">BOSS: SALTJACK (' + Math.round(mk ? mk.x : 0) + ', ' + Math.round(mk ? mk.z : 0) + ') — ' + cur.standoff + ' LEFT</span>';
+    else if (mk && mk.on) h += '<span class="boss">BOSS: SALTJACK</span>';
+    h += '</div>';
+    return h;
+  };
+  M.render = function () {
+    if (!M._open || !M._cv) return;
+    var cv = M._cv, bd = cv.parentElement;
+    var W = bd.clientWidth || 1280, Hh = bd.clientHeight || 676;
+    if (cv.width !== W || cv.height !== Hh) { cv.width = W; cv.height = Hh; }
+    var g = cv.getContext('2d');
+    if (!g) return;
+    var ds = districts(), b = bounds(ds);
+    g.fillStyle = '#0a1220'; g.fillRect(0, 0, W, Hh);
+    var sc = Math.min(W / (b.x1 - b.x0), Hh / (b.z1 - b.z0)) * M._zoom;
+    var ox = (W - (b.x1 - b.x0) * sc) / 2, oy = (Hh - (b.z1 - b.z0) * sc) / 2;
+    function X(x) { return ox + (x - b.x0) * sc; }
+    function Z(z) { return oy + (z - b.z0) * sc; }
     for (var i = 0; i < ds.length; i++) {
       var d = ds[i];
-      ctx.fillStyle = '#' + ('000000' + (d.tint || 0x223344).toString(16)).slice(-6);
-      ctx.globalAlpha = 0.55;
-      ctx.fillRect(px(d.x0), py(d.z0), px(d.x1) - px(d.x0), py(d.z1) - py(d.z0));
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 13px Arial'; ctx.textAlign = 'left';
-      ctx.fillText(d.name.toUpperCase(), px(d.x0) + 6, py(d.z0) + 18);
+      g.fillStyle = DCOL[i % DCOL.length];
+      g.fillRect(X(d.x0), Z(d.z0), (d.x1 - d.x0) * sc, (d.z1 - d.z0) * sc);
+      g.strokeStyle = 'rgba(255,255,255,.25)'; g.lineWidth = 1;
+      g.strokeRect(X(d.x0), Z(d.z0), (d.x1 - d.x0) * sc, (d.z1 - d.z0) * sc);
     }
-    var rs = W.roads || [];
-    ctx.strokeStyle = '#5a6a80'; ctx.lineWidth = 5;
-    for (var r = 0; r < rs.length; r++) {
-      ctx.beginPath();
-      if (rs[r].axis === 'z') { ctx.moveTo(px(rs[r].at), py(rs[r].from)); ctx.lineTo(px(rs[r].at), py(rs[r].to)); }
-      else { ctx.moveTo(px(rs[r].from), py(rs[r].at)); ctx.lineTo(px(rs[r].to), py(rs[r].at)); }
-      ctx.stroke();
+    // Grid rapat: garis tiap ~28 px layar — tanpa ruang hitam.
+    g.strokeStyle = 'rgba(255,255,255,.13)'; g.lineWidth = 1;
+    var step = 28, gx, gy;
+    for (gx = 0; gx <= W; gx += step) { g.beginPath(); g.moveTo(gx, 0); g.lineTo(gx, Hh); g.stroke(); }
+    for (gy = 0; gy <= Hh; gy += step) { g.beginPath(); g.moveTo(0, gy); g.lineTo(W, gy); g.stroke(); }
+    // Jalan utama: garis terang di perbatasan distrik.
+    g.strokeStyle = 'rgba(255,220,120,.35)'; g.lineWidth = 3;
+    for (var k = 0; k < ds.length; k++) {
+      g.beginPath(); g.moveTo(X(ds[k].x0), Z(ds[k].z0)); g.lineTo(X(ds[k].x1), Z(ds[k].z0)); g.stroke();
     }
-
-    ctx.fillStyle = '#1a5a8a'; ctx.fillRect(0, 0, px(-560) + 8, h);
-    var lms = W.landmarks || [];
-    ctx.textAlign = 'center';
-    for (var m = 0; m < lms.length; m++) {
-      var lm = lms[m], ic = ICONS[lm.kind] || '•';
-      ctx.fillStyle = lm.kind === 'safehouse' ? '#39d353' : lm.kind === 'shop' ? '#b57edc' : lm.kind === 'hospital' ? '#ff5a5a' : lm.kind === 'police' ? '#4d9fff' : '#ffd23f';
-      ctx.beginPath(); ctx.arc(px(lm.x), py(lm.z), 11, 0, 6.2832); ctx.fill();
-      ctx.fillStyle = '#0a0f18'; ctx.font = 'bold 12px Arial';
-      ctx.fillText(ic, px(lm.x), py(lm.z) + 4);
+    // Ikon lokasi.
+    var icons = iconPts(ds, b, W, Hh);
+    g.font = 'bold 15px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    var marks = [];
+    for (var n = 0; n < icons.length; n++) {
+      var ic = icons[n], px = ox + ic.p.x, py = oy + ic.p.z;
+      g.fillStyle = ic.c; g.fillText(ic.s, px, py);
+      marks.push({ x: px, y: py });
     }
-    var t = missionTarget();
-    if (t) {
-      ctx.strokeStyle = '#ffe14d'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(px(t.x), py(t.z), 14, 0, 6.2832); ctx.stroke();
-      ctx.fillStyle = '#ffe14d'; ctx.font = 'bold 16px Arial';
-      ctx.fillText('◆', px(t.x), py(t.z) - 18);
+    // Marker objektif (berlian merah KECIL — r5) + boss + hero.
+    var mk = null;
+    try { mk = SB.missions ? SB.missions.marker : null; } catch (e) {}
+    var hx = 0, hz = 60;
+    try { hx = (SB.engine && SB.engine.hero) ? SB.engine.hero.x : 0; hz = (SB.engine && SB.engine.hero) ? SB.engine.hero.z : 60; } catch (e) {}
+    var heroPx = X(hx), heroPy = Z(hz);
+    if (mk && mk.on) {
+      var mx = X(mk.x), my = Z(mk.z), r = 7;
+      g.fillStyle = '#ff3b30';
+      g.beginPath(); g.moveTo(mx, my - r); g.lineTo(mx + r, my); g.lineTo(mx, my + r); g.lineTo(mx - r, my); g.closePath(); g.fill();
+      g.fillStyle = '#ffd34d'; g.font = 'bold 11px Arial';
+      g.fillText(mk.label || 'SALTJACK', mx, my - 16);
+      marks.push({ x: mx, y: my });
+      // Boss di samping diamond (+14 px, tidak menumpuk).
+      g.fillStyle = '#ff3b30'; g.beginPath(); g.arc(mx + 14, my + 2, 5, 0, 6.2832); g.fill();
+      g.fillStyle = '#fff'; g.font = 'bold 10px Arial'; g.fillText('BOSS', mx + 14, my + 16);
     }
-    var p = W.player && W.player.pos;
-    if (p) {
-      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px(p.x), py(p.z), 7, 0, 6.2832); ctx.fill();
-      ctx.fillStyle = '#ff2a7a'; ctx.beginPath(); ctx.arc(px(p.x), py(p.z), 4, 0, 6.2832); ctx.fill();
-    }
-  }
-  function build() {
-    root = document.createElement('div');
-    root.id = 'sb-map';
-    root.style.cssText = 'position:fixed;inset:0;background:#040810;z-index:55;display:none;color:#fff;font-family:Arial,sans-serif';
-    root.innerHTML = '<div style="display:flex;height:100%;padding:18px;gap:16px;box-sizing:border-box">' +
-      '<div style="flex:1;display:flex;flex-direction:column"><div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:22px;letter-spacing:3px">SOLMAR BAY</b><button id="sb-map-x" style="background:#ff2a7a;color:#fff;border:0;border-radius:5px;padding:6px 12px;cursor:pointer">CLOSE [M]</button></div>' +
-      '<div id="sb-map-gps" style="color:#ffd23f;font-size:14px;margin:6px 0"></div>' +
-      '<canvas id="sb-map-cv" width="640" height="620" style="align-self:center;height:100%;aspect-ratio:640/620;max-width:100%;border:2px solid #2a4a6a;border-radius:8px"></canvas></div>' +
-      '<div style="width:300px;overflow-y:auto"><div style="font-size:13px;letter-spacing:2px;color:#9fb4d8">STORY JOBS — <span id="sb-map-done"></span></div><div id="sb-map-jobs"></div>' +
-      '<div style="font-size:13px;letter-spacing:2px;color:#9fb4d8;margin-top:14px">LEGEND</div><div id="sb-map-legend" style="font-size:13px;line-height:1.9"></div>' +
-      '<div style="font-size:13px;letter-spacing:2px;color:#9fb4d8;margin-top:14px">DISTRICTS</div><div id="sb-map-districts" style="font-size:13px;line-height:1.7"></div>' +
-      '<div style="font-size:13px;letter-spacing:2px;color:#9fb4d8;margin-top:14px">COLLECTIBLES</div><div id="sb-map-coll" style="font-size:13px;line-height:1.7"></div></div></div>';
-    document.body.appendChild(root);
-    cv = root.querySelector('#sb-map-cv');
-    ctx = cv.getContext('2d');
-    root.querySelector('#sb-map-x').onclick = function () { SB.map.hide(); };
-    var lh = '';
-    for (var i = 0; i < LEGEND.length; i++) lh += '<span style="color:' + LEGEND[i][1] + '">' + LEGEND[i][0] + '</span> ' + LEGEND[i][2] + '<br>';
-    root.querySelector('#sb-map-legend').innerHTML = lh;
-  }
-  SB.map = {
-    JOBS: JOBS_FALLBACK,
-    show: function () {
-      if (!root) build();
-      visible = true; root.style.display = 'block';
-      SB.map.render();
-      if (SB.setPaused) SB.setPaused(true);
-    },
-    hide: function () {
-      visible = false;
-      if (root) root.style.display = 'none';
-      if (SB.setPaused && !(SB.dialog && SB.dialog.active())) SB.setPaused(false);
-    },
-    toggle: function () { if (SB.map.isOpen()) SB.map.hide(); else SB.map.show(); },
-    isOpen: function () { return visible; },
-    render: function () {
-      if (!root || !visible) return;
-      drawMap();
-      var js = jobs();
-      var h = '';
-      for (var i = 0; i < js.length; i++) {
-        var j = js[i];
-        var done = i < S.missionsDone;
-        var active = S.mission && S.mission.id === j.id;
-        h += '<div style="padding:8px 0;border-top:1px solid #223">' +
-          '<b style="color:' + (active ? '#ffd23f' : done ? '#39d353' : '#fff') + '">' + (i + 1) + '. ' + j.title + '</b>' +
-          '<span style="float:right;color:#39d353">$' + (j.payout || 0).toLocaleString('en-US') + '</span><br>' +
-          '<span style="color:#9fb4d8;font-size:12px">' + (j.contact || 'MARA SOLIS') + ' · ' + (done ? 'DONE ✓' : active ? 'IN PROGRESS' : 'LOCKED') + '</span></div>';
+    g.fillStyle = '#fff';
+    g.beginPath(); g.moveTo(heroPx, heroPy - 9); g.lineTo(heroPx + 7, heroPy + 7); g.lineTo(heroPx - 7, heroPy + 7); g.closePath(); g.fill();
+    g.fillStyle = '#fff'; g.font = 'bold 11px Arial'; g.fillText('YOU', heroPx, heroPy + 18);
+    marks.push({ x: heroPx, y: heroPy });
+    // Label distrik: tengah distrik, clamp dari panel jobs (300 px kanan),
+    // geser ke bawah bila menabrak marker.
+    g.font = 'bold 13px Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    var panelLeft = W - 320;
+    for (var q = 0; q < ds.length; q++) {
+      var dd = ds[q];
+      var cx = X((dd.x0 + dd.x1) / 2), cy = Z((dd.z0 + dd.z1) / 2);
+      var tw = g.measureText(dd.name).width + 12;
+      if (cx + tw / 2 > panelLeft) cx = panelLeft - tw / 2;
+      if (cx - tw / 2 < 6) cx = 6 + tw / 2;
+      for (var m2 = 0; m2 < marks.length; m2++) {
+        if (Math.abs(marks[m2].x - cx) < tw / 2 + 8 && Math.abs(marks[m2].y - cy) < 34) { cy += 36; break; }
       }
-      root.querySelector('#sb-map-jobs').innerHTML = h;
-      root.querySelector('#sb-map-done').textContent = S.missionsDone + '/' + S.missionsTotal + ' DONE';
-      var ds = W.districts || [], dh = '';
-      for (var d = 0; d < ds.length; d++) dh += '· ' + ds[d].name + '<br>';
-      root.querySelector('#sb-map-districts').innerHTML = dh;
-      root.querySelector('#sb-map-coll').innerHTML = '☀ Sun Coins ' + S.coins + '/' + S.coinsTotal + '<br>◉ Sunset Tapes ' + S.tapes + '/' + S.tapesTotal + '<br>♦ Properties 0/2';
-      var t = missionTarget(), g = distTo(t);
-      root.querySelector('#sb-map-gps').textContent = t ? ('GPS → ' + (S.mission ? S.mission.title : 'OBJECTIVE') + ': ' + g + ' m') : 'GPS — no active objective';
+      // Clamp vertikal (kotak label cy±10): Bayline Docks terpotong di tepi bawah.
+      if (cy < 12) cy = 12; if (cy > Hh - 12) cy = Hh - 12;
+      g.fillStyle = 'rgba(0,0,0,.55)';
+      g.fillRect(cx - tw / 2, cy - 10, tw, 20);
+      g.fillStyle = '#fff'; g.fillText(dd.name, cx, cy);
     }
+    var zm = M._el.querySelector('.zm'); if (zm) zm.textContent = 'ZOOM ×' + M._zoom.toFixed(2);
+    if (M._jobs) M._jobs.innerHTML = M._jobsHtml();
   };
-  window.addEventListener('keydown', function (e) {
-    if (e.code === 'KeyM' && S.started) { e.preventDefault(); SB.map.toggle(); }
-  });
+  M.open = function () {
+    if (!M._el) M._build();
+    M._open = true; M._el.style.display = 'flex';
+    M.render();
+    try { if (SB.audio) SB.audio.ui(); } catch (e) {}
+    return true;
+  };
+  M.close = function () {
+    M._open = false;
+    if (M._el) M._el.style.display = 'none';
+    return true;
+  };
+  M.toggle = function () { return M._open ? M.close() : M.open(); };
+  if (!M._bound) {
+    M._bound = true;
+    try {
+      document.addEventListener('keydown', function (e) {
+        if (e.repeat || !e.code) return;
+        if (e.code === 'KeyM') M.toggle();
+        else if (M._open && e.code === 'Equal') M.zoomIn();
+        else if (M._open && e.code === 'Minus') M.zoomOut();
+      });
+      window.addEventListener('resize', function () { if (M._open) M.render(); });
+    } catch (e) {}
+  }
 })();
