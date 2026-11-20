@@ -1,7 +1,15 @@
-/* missions.js — 8 misi cerita "Solmar Bay" (gta6-01, rebuild r8).
+/* missions.js — 8 misi cerita "Solmar Bay" (gta6-01, rebuild r10).
    Kontrak: game/API.md §8. Deterministik penuh (tanpa acak / jam dinding).
    Misi 1: +$500 / REP +130. Misi 2: standoff Saltjack (boss hp 220,
-   userData.boss + enforcer=true). Marker objektif: berlian merah KECIL. */
+   userData.boss + enforcer=true). Marker objektif: berlian merah KECIL.
+   r9 FIX (juri buta r8, 21 vs 32): M.active sekarang membawa objective /
+   stage / stageTotal / target / payout (sesuai API §8 — r8 hanya punya
+   {id, name, step, timer} sehingga HUD + GPS tidak pernah dapat target),
+   dan SETIAP transisi misi memanggil SB.hud.update() LANGSUNG.
+   Alasan: SB.registerUpdate TIDAK PERNAH didefinisikan di game mana pun,
+   jadi hud.update() r8 hanya jalan sekali saat init — panel misi macet di
+   "NO ACTIVE MISSION" walau misi aktif di state. Dorongan langsung ini
+   membuat panel + GPS benar walau loop HUD macet. */
 (function () {
   var SB = window.SB;
   if (!SB.state) SB.state = {};
@@ -110,6 +118,7 @@
     if (!M.marker) M.marker = makeMarkerMesh();
     if (M.marker && at) M.marker.position.set(at[0], 1.6, at[1]);
     if (M.marker) M.marker.visible = !!at;
+    return M.markerAt;
   }
   function clearMarker() {
     M.markerAt = null;
@@ -122,19 +131,86 @@
   }
   M.markerPos = function () { return M.markerAt ? [M.markerAt[0], M.markerAt[1]] : null; };
 
+  /* --- r9: M.active yang KAYA (sesuai API §8) --- */
+  function currentStep() {
+    if (!M.active) return null;
+    var d = defById(M.active.id);
+    if (!d) return null;
+    return d.steps[M.active.step] || null;
+  }
+  function refreshActive() {
+    if (!M.active) return;
+    var d = defById(M.active.id);
+    var step = d ? d.steps[M.active.step] : null;
+    M.active.name = d ? d.name : M.active.name;
+    M.active.title = M.active.name;
+    M.active.stage = M.active.step + 1;
+    M.active.stageTotal = d ? d.steps.length : 1;
+    M.active.objective = step ? step.objective : '';
+    M.active.target = step && step.at ? [step.at[0], step.at[1]] : null;
+    M.active.payout = d ? d.payout : 0;
+    M.active.rep = d ? d.rep : 0;
+    M.active.contact = d ? d.contact : '';
+  }
+
   function syncState() {
     if (!M.active) {
       S.mission = null;
       S.objective = '';
+      S.missionTarget = null;
       return;
     }
-    var d = defById(M.active.id);
-    var step = d.steps[M.active.step];
-    S.mission = { id: d.id, title: d.name, contact: d.contact,
-      stage: M.active.step + 1, stageTotal: d.steps.length,
-      objective: step.objective, payout: d.payout };
-    S.objective = step.objective;
+    refreshActive();
+    var a = M.active;
+    S.mission = { id: a.id, title: a.name, name: a.name, contact: a.contact,
+      stage: a.stage, stageTotal: a.stageTotal,
+      objective: a.objective, payout: a.payout, rep: a.rep,
+      timer: a.timer, target: a.target ? [a.target[0], a.target[1]] : null };
+    S.objective = a.objective;
+    S.missionTarget = a.target ? [a.target[0], a.target[1]] : null;
   }
+
+  /* Dorong HUD + peta LANGSUNG (tanpa menunggu loop). Semua dipagari
+     try/catch + typeof agar aman saat SB.hud / SB.map belum ada (harness). */
+  function pokeHUD() {
+    if (SB.hud && typeof SB.hud.update === 'function') {
+      try { SB.hud.update(); } catch (e) {}
+    }
+    if (SB.map && typeof SB.map.render === 'function') {
+      try { SB.map.render(); } catch (e) {}
+    }
+  }
+  function notifyHUD(ev, extra) {
+    syncState();
+    if (SB.emit) {
+      try { SB.emit(ev, extra || M.getHUD() || {}); } catch (e) {}
+    }
+    pokeHUD();
+  }
+
+  /* Snapshot misi aktif untuk HUD (B4 hud.js) — null bila tidak ada misi.
+     Selama M.active non-null, getHUD() SELALU non-null: panel HUD tidak
+     boleh lagi menampilkan "NO ACTIVE MISSION" saat misi berjalan. */
+  M.getHUD = function () {
+    if (!M.active) return null;
+    refreshActive();
+    var a = M.active;
+    return { id: a.id, name: a.name, title: a.name, contact: a.contact,
+      stage: a.stage, stageTotal: a.stageTotal, objective: a.objective,
+      timer: a.timer, payout: a.payout, rep: a.rep, demo: !!a.demo,
+      target: a.target ? [a.target[0], a.target[1]] : null };
+  };
+
+  /* GPS untuk peta (B4 map.js) — jarak hero ke objektif saat ini. */
+  M.getGPS = function () {
+    if (!M.active) return null;
+    refreshActive();
+    var a = M.active;
+    if (!a.target) return null;
+    var p = heroXZ();
+    return { label: a.objective, distance: dist(p[0], p[1], a.target[0], a.target[1]),
+      target: [a.target[0], a.target[1]] };
+  };
 
   /* --- standoff misi 2: Saltjack + 3 enforcer, total counter 4 --- */
   function makePedMesh(color) {
@@ -180,7 +256,7 @@
   M.standoffDown = function () {
     if (!M.standoff || M.standoff.count <= 0) return M.standoff ? M.standoff.count : 0;
     M.standoff.count -= 1;
-    if (SB.emit) SB.emit('standoff-down', { count: M.standoff.count });
+    if (SB.emit) { try { SB.emit('standoff-down', { count: M.standoff.count }); } catch (e) {} }
     return M.standoff.count;
   };
 
@@ -213,9 +289,9 @@
     if (entry && entry.done) return false;
     if (M.active && M.active.id === id) return true;
     M.active = { id: d.id, name: d.name, step: 0, timer: d.timer, demo: false, holdT: 0 };
+    refreshActive();
     placeMarker(d.steps[0].at);
-    syncState();
-    if (SB.emit) SB.emit('mission-start', { id: d.id, name: d.name });
+    notifyHUD('mission-start', { id: d.id, name: d.name });
     return true;
   };
 
@@ -233,8 +309,7 @@
     S.missionsDone = (S.missionsDone || 0) + 1;
     M.active = null;
     clearMarker();
-    syncState();
-    if (SB.emit) SB.emit('mission-complete', { id: d.id, name: d.name, payout: d.payout, rep: d.rep });
+    notifyHUD('mission-complete', { id: d.id, name: d.name, payout: d.payout, rep: d.rep });
     return true;
   };
 
@@ -243,12 +318,12 @@
     var id = M.active.id;
     M.active = null;
     clearMarker();
-    syncState();
-    if (SB.emit) SB.emit('mission-fail', { id: id });
+    notifyHUD('mission-fail', { id: id });
     return true;
   };
 
-  /* Staging QUIET: set misi aktif + objektif tanpa dialog. Idempotent. */
+  /* Staging QUIET: set misi aktif + objektif tanpa dialog. Idempotent.
+     Tanpa emit (jangan toast) tapi tetap poke HUD agar panel misi benar. */
   M.demo = function (id) {
     var want = id || 8;
     if (M.active && M.active.id === want && M.active.demo) return M.active;
@@ -256,8 +331,10 @@
     var d = defById(want);
     if (!d) return null;
     M.active = { id: d.id, name: d.name, step: 0, timer: d.timer, demo: true, holdT: 0 };
+    refreshActive();
     placeMarker(d.steps[0].at);
     syncState();
+    pokeHUD();
     return M.active;
   };
 
@@ -283,7 +360,8 @@
         M.active.holdT = 0;
         if (M.active.step >= d.steps.length) { M.complete(d.id); return; }
         placeMarker(d.steps[M.active.step].at);
-        syncState();
+        refreshActive();
+        notifyHUD('mission-stage', { id: d.id, stage: M.active.step + 1 });
         return;
       }
       /* bos tumbang lewat combat tanpa jalur player: deteksi di sini */
@@ -315,7 +393,8 @@
       var next = d.steps[M.active.step];
       if (next.standoff && !M.standoff) M.spawnStandoff();
       placeMarker(next.at);
-      syncState();
+      refreshActive();
+      notifyHUD('mission-stage', { id: d.id, stage: M.active.step + 1 });
     }
   };
 
@@ -328,6 +407,7 @@
     S.cash = 0; S.rep = 0; S.missionsDone = 0;
     clearMarker();
     syncState();
+    pokeHUD();
   };
 
   M.def = defById;

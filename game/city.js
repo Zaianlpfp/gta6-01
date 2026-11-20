@@ -1,5 +1,13 @@
-// city.js — B1 r8. Kota 3D "Solmar Bay": grid jalan, 71 gedung, palm, neon,
+// city.js — B1 r10. Kota 3D "Solmar Bay": grid jalan, 71 gedung, palm, neon,
 // props, pantai + marina. Deterministik (SB.rand, seed 1337). Kontrak: game/API.md.
+// Perbaikan r10 vs r9: koridor jalan showcase (x=0, x=40) DILEBARKAN —
+// bangunan yang menghadap jalan dipaksa lebar <=11 (fasad >=7,5 dari sumbu
+// jalan; r9 fasad 4,5 -> tembok makan ~40% frame onfoot, hero kecil di tengah
+// ngarai). Clamp SETELAH rand (stream rand tetap sama — kota lain identik,
+// jumlah gedung tetap 71).
+// Dipertahankan dari r9: spawn onfoot (40,62) di jalan x=40; foreground pasar
+// di tepi jalan x=40; ped menyimpan userData bx/bz/axis/sp untuk drift di
+// engine.step (TANPA rand baru — kota tetap identik dengan r8).
 (function () {
   var SB = window.SB = window.SB || {};
   var C = SB.city = {};
@@ -17,7 +25,7 @@
     { name: 'Bayline Docks', cx: 100, cz: 120, w: 90, d: 60 }
   ];
   C.roads = [];
-  C.spawnPoints = { cover: [0, 0], onfoot: [60, 62], mission: [2, 10], free: [0, 40] };
+  C.spawnPoints = { cover: [0, 0], onfoot: [40, 62], mission: [2, 10], free: [0, 40] };
   C.bank = { pos: [2, 7, -2], rotY: Math.PI / 4 };
   C.staging = { coverCruisers: [[-5, 4], [5.5, 6]] };
   C.counts = { buildings: 0, palms: 0, neons: 0, props: 0, traffic: 0, peds: 0 };
@@ -219,6 +227,14 @@
           var w = SB.randRange(11, 17), d = SB.randRange(11, 17);
           var ox = (k === 0) ? -7 : (k === 1) ? 7 : 0;
           var oz = (k === 0) ? -6 : (k === 1) ? 6 : -1;
+          // r10: koridor jalan showcase (x=0, x=40) dilebarkan. Bangunan yang
+          // menghadap jalan dipaksa lebar <=11 supaya fasad >=7,5 dari sumbu
+          // jalan (r9: fasad 4,5 -> tembok makan ~40% frame onfoot).
+          // Clamp SETELAH rand — stream rand tetap sama, kota lain identik.
+          // (bx=20,k=1)&(bx=60,k=0) menghadap x=40; (bx=-20,k=1)&(bx=20,k=0)
+          // menghadap x=0. Gedung bank diskala 26x14x14 setelahnya (tak berubah).
+          var roadSide = (k === 1 && (bx === 20 || bx === -20)) || (k === 0 && (bx === 60 || bx === 20));
+          if (roadSide) w = Math.min(w, 11);
           var mat = new THREE.MeshLambertMaterial({ map: winMats[Math.floor(SB.rand() * winMats.length)] });
           var b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
           b.position.set(bx + ox, h / 2, bz + oz);
@@ -282,11 +298,12 @@
       }
     });
     for (var pi2 = 0; pi2 < 10; pi2++) palm(scene, SB.randRange(-160, 160), SB.randRange(155, 185), SB.randRange(1, 1.4));
-    // Foreground on-foot (Old Mercado, sekitar 60,62): palm + stall + mobil parkir
-    palm(scene, 54, 70, 1.2); palm(scene, 68, 54, 1.1);
-    stall(scene, 54, 56, 0.2, 0xff5a5a); stall(scene, 66, 60, -0.3, 0xffc23d); stall(scene, 58, 52, 0.1, 0x5aff8a);
-    carMesh(scene, 52, 66, Math.PI / 2, 0x8ec9a9, true);
-    carMesh(scene, 70, 60, -Math.PI / 2, 0xd9a05b, true);
+    // Foreground on-foot r9 (tepi jalan x=40 — r8 (54..70, 52..70) di DALAM gedung
+    // blok (60,60), tidak terlihat): palm + stall + mobil parkir di tepi jalan.
+    palm(scene, 46, 50, 1.2); palm(scene, 46, 74, 1.1);
+    stall(scene, 44, 54, 0.2, 0xff5a5a); stall(scene, 44, 62, -0.3, 0xffc23d); stall(scene, 44, 70, 0.1, 0x5aff8a);
+    carMesh(scene, 36, 58, Math.PI / 2, 0x8ec9a9, true);
+    carMesh(scene, 36, 68, -Math.PI / 2, 0xd9a05b, true);
     // Foreground big-score (depan bank, sekitar 2,10): palm + mobil parkir + roadblock
     palm(scene, -12, 12, 1.2); palm(scene, 16, 8, 1.1); palm(scene, -14, -4, 1.0);
     carMesh(scene, -8, 8, 0.3, 0x7fb3d5, true);
@@ -347,10 +364,15 @@
       head.position.y = 1.65; g2.add(head);
       var px = ROAD_LINES[Math.floor(SB.rand() * ROAD_LINES.length)] + SB.randPick([-6.6, 6.6]);
       var pz = SB.randRange(-200, 200);
-      if (SB.rand() < 0.5) { var tmp = px; px = pz; pz = tmp; }
+      var swapped = (SB.rand() < 0.5);
+      if (swapped) { var tmp = px; px = pz; pz = tmp; }
       g2.position.set(px, 0, pz);
       g2.rotation.y = SB.randRange(0, Math.PI * 2);
       g2.userData.walkPhase = SB.randRange(0, 6.28);
+      // r9: data drift ped untuk engine.step (TANPA rand baru — stream tetap sama).
+      g2.userData.bx = px; g2.userData.bz = pz;
+      g2.userData.axis = swapped ? 'x' : 'z';
+      g2.userData.sp = 0.5 + (g2.userData.walkPhase % 1) * 0.7;
       scene.add(g2);
       C.peds.push(g2);
     }

@@ -1,5 +1,18 @@
-// engine.js — B1 r8. Three.js setup, loop, kamera chase, langit, efek.
+// engine.js — B1 r10. Three.js setup, loop, kamera chase, langit, efek.
 // Kontrak: game/API.md. Deterministik: tanpa Math.random / Date.now.
+// Perbaikan r10 vs r9:
+//  - SB.registerUpdate(fn) DIDEFINISIKAN di sini + dipanggil step() tiap frame
+//    (r9: tidak ada yang mendefinisikannya — hanya hud.js yang memanggil
+//    dengan guard — itu akar HUD beku: hud.update() cuma jalan sekali saat init).
+//  - Clamp dt 0,05 DIHAPUS dari loop rAF (boot/start): dt live = wall-clock,
+//    cap 1,0 detik. Temuan B2 r9: clamp 0,05 bikin sim live 10-20x lebih
+//    lambat dari wall di headless ~1fps (10 dtk W-hold cuma majukan simTime
+//    0,47 dtk). Modul B2 sudah menangani dt sampai 1,0 dtk.
+//  - Kamera onfoot: pos (40,6.0,78), look (40,1.2,56) + koridor jalan
+//    dilebarkan di city.js (fasad >=7,5 dari sumbu jalan).
+// Dipertahankan dari r9: advanceClock di step() (jam maju); step() memanggil
+// SB.police.update(dt) (satu-satunya caller); cone heli opacity 0,10;
+// spawn onfoot (40,62); stall/mobil/palm di tepi jalan; ped drift murni simTime.
 (function () {
   var SB = window.SB = window.SB || {};
 
@@ -28,10 +41,46 @@
   SB.state = {
     paused: false, heat: 0, rep: 0, cash: 0,
     day: 1, hour: 17, min: 24, timeLabel: 'SUNSET',
+    clockRate: 1, // 1 detik sim = 1 menit game (v3)
     simTime: 0, preset: 'cover', speedKmh: 0,
     vehicleName: '—', vehicleCond: 100, vehicleStatus: 'OK',
     inSight: false, objective: '', staging: false
   };
+  // Jam HUD dalam menit sejak 00:00; dimajukan advanceClock() tiap step().
+  SB._clockMin = 17 * 60 + 24;
+
+  // ---- Per-frame update registry (r10, BARU) ----
+  // Akar HUD beku r8/r9: SB.registerUpdate tidak pernah didefinisikan di file
+  // game mana pun — hud.js memanggilnya dengan guard sehingga no-op, dan
+  // hud.update() hanya jalan sekali saat init. Kini didefinisikan di sini:
+  // step() memanggil semua callback terdaftar tiap tick, SETELAH state
+  // dimajukan dan SEBELUM render, supaya HUD/modul lain membaca state terbaru.
+  SB._updates = [];
+  SB.registerUpdate = function (fn) {
+    if (typeof fn !== 'function') return false;
+    if (SB._updates.indexOf(fn) !== -1) return true; // duplikat diabaikan
+    SB._updates.push(fn);
+    return true;
+  };
+  SB.unregisterUpdate = function (fn) {
+    var i = SB._updates.indexOf(fn);
+    if (i === -1) return false;
+    SB._updates.splice(i, 1);
+    return true;
+  };
+
+  // Jam game: 1 detik sim = 1 menit game (clockRate, sama seperti v3).
+  // Pure function dari simTime -> deterministik.
+  function advanceClock(dt) {
+    var rate = (typeof SB.state.clockRate === 'number') ? SB.state.clockRate : 1;
+    if (typeof SB._clockMin !== 'number') SB._clockMin = (SB.state.hour || 17) * 60 + (SB.state.min || 24);
+    SB._clockMin += dt * rate;
+    while (SB._clockMin >= 1440) { SB._clockMin -= 1440; SB.state.day += 1; }
+    SB.state.hour = Math.floor(SB._clockMin / 60);
+    SB.state.min = Math.floor(SB._clockMin % 60);
+    var h = SB.state.hour;
+    SB.state.timeLabel = (h >= 20 || h < 6) ? 'NIGHT' : (h >= 17 ? 'SUNSET' : 'DAY');
+  }
 
   // ---- Engine ----
   var E = SB.engine = {};
@@ -39,6 +88,9 @@
   var flashes = [], flashLight = null;
   var clouds = [], sunDisc = null;
   var skyMat = null;
+  // dt live: wall-clock, cap 1,0 detik (r10 — r9 clamp 0,05 bikin sim live
+  // 10-20x lebih lambat dari wall di headless ~1fps). B2 menangani dt s.d. 1,0.
+  var DT_CAP = 1.0;
 
   function skyGradient(top, mid, bot) {
     return new THREE.ShaderMaterial({
@@ -132,7 +184,7 @@
     lastT = 0;
     var loop = function (t) {
       rafId = requestAnimationFrame(loop);
-      var dt = lastT ? Math.min((t - lastT) / 1000, 0.05) : 1 / 60;
+      var dt = lastT ? Math.min((t - lastT) / 1000, DT_CAP) : 1 / 60;
       lastT = t;
       if (!SB.state.paused) E.step(dt);
       else E.renderer.render(E.scene, E.camera);
@@ -156,7 +208,7 @@
     if (rafId) return E; lastT = 0;
     var loop = function (t) {
       rafId = requestAnimationFrame(loop);
-      var dt = lastT ? Math.min((t - lastT) / 1000, 0.05) : 1 / 60;
+      var dt = lastT ? Math.min((t - lastT) / 1000, DT_CAP) : 1 / 60;
       lastT = t;
       if (!SB.state.paused) E.step(dt); else E.renderer.render(E.scene, E.camera);
     };
@@ -176,12 +228,27 @@
   E.step = function (dt) {
     if (!E.renderer) return E;
     SB.state.simTime += dt;
+    // Jam HUD hidup (r9): 1 detik sim = 1 menit game, seperti v3.
+    advanceClock(dt);
     // Awan drift deterministik
     for (var i = 0; i < clouds.length; i++) {
       var c = clouds[i];
       c.position.x = c.userData.bx + SB.state.simTime * c.userData.sp;
       if (c.position.x > 460) c.position.x = -460;
     }
+    // Ped ambient: jalan mondar-mandir di trotoar (pure function simTime).
+    if (SB.city && SB.city.peds) {
+      for (var pi = 0; pi < SB.city.peds.length; pi++) {
+        var pd = SB.city.peds[pi], u = pd.userData || {};
+        var off = Math.sin(SB.state.simTime * 0.22 * (u.sp || 1) + (u.walkPhase || 0)) * 6;
+        if (u.axis === 'x') { pd.position.x = (u.bx || 0) + off; pd.position.z = u.bz || 0; }
+        else { pd.position.x = u.bx || 0; pd.position.z = (u.bz || 0) + off; }
+        pd.position.y = Math.abs(Math.sin(SB.state.simTime * 3 + (u.walkPhase || 0))) * 0.06;
+      }
+    }
+    // Polisi (heli + cruiser) — SATU-SATUNYA pemanggil update di sini.
+    // Di r8 tidak ada yang memanggil police.update sehingga heli diam.
+    if (SB.police && typeof SB.police.update === 'function') SB.police.update(dt);
     // Flash decay
     var anyFlash = false;
     for (var j = 0; j < flashes.length; j++) {
@@ -194,6 +261,11 @@
     }
     flashLight.intensity = anyFlash ? 2.4 : 0;
     if (anyFlash) flashLight.position.copy(E.muzzlePos);
+    // Update terdaftar (r10): HUD + modul lain membaca state terbaru tiap frame.
+    // Error di satu callback tidak boleh menghentikan yang lain / step ini.
+    for (var ui = 0; ui < SB._updates.length; ui++) {
+      try { SB._updates[ui](dt); } catch (e) {}
+    }
     // Kamera
     var cam = E.camera;
     if (E._camMode === 'fixed') {
@@ -213,10 +285,10 @@
     return E;
   };
 
-  // Cone spotlight heli: opacity 0.25 TETAP (kontrak API §3)
+  // Cone spotlight heli: opacity 0.10 (r9 — r8 0.25 memutihkan papan bank).
   E.spotCone = function () {
-    var geo = new THREE.ConeGeometry(7, 42, 20, 1, true);
-    var mat = new THREE.MeshBasicMaterial({ color: 0xfff2b0, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
+    var geo = new THREE.ConeGeometry(5, 36, 20, 1, true);
+    var mat = new THREE.MeshBasicMaterial({ color: 0xfff2b0, transparent: true, opacity: 0.10, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
     var m = new THREE.Mesh(geo, mat);
     return m;
   };
@@ -257,8 +329,11 @@
       SB.state.heat = (opts.heat !== undefined) ? opts.heat : 2;
       SB.state.hour = 18; SB.state.min = 5; SB.state.timeLabel = 'SUNSET';
       E._camMode = 'fixed';
-      var sp = (SB.city && SB.city.spawnPoints) ? SB.city.spawnPoints.onfoot : [24, 30];
-      E._camPos.set(sp[0] + 9, 5.2, sp[1] + 14); E._camLook.set(sp[0], 1.3, sp[1] - 4);
+      // r10: hero + kamera DI JALAN x=40 (spawn (40,62)); koridor dilebarkan
+      // di city.js (fasad >=7,5 dari sumbu) + kamera sedikit lebih tinggi /
+      // mundur supaya jalan + hero terbaca, bukan tembok (r9: tembok ~40%).
+      var sp = (SB.city && SB.city.spawnPoints) ? SB.city.spawnPoints.onfoot : [40, 62];
+      E._camPos.set(40, 6.0, 78); E._camLook.set(40, 1.2, 56);
       E._focus.set(sp[0], 1.2, sp[1]); E.heading = Math.PI;
       SB.state.objective = 'Meet Mara at the market';
       SB.state.inSight = false;
@@ -266,8 +341,10 @@
       SB.state.heat = (opts.heat !== undefined) ? opts.heat : 5;
       SB.state.hour = 17; SB.state.min = 48; SB.state.timeLabel = 'SUNSET';
       E._camMode = 'fixed';
-      var bp = (SB.city && SB.city.spawnPoints) ? SB.city.spawnPoints.mission : [2, -14];
-      E._camPos.set(bp[0] + 9, 6.2, bp[1] + 16); E._camLook.set(bp[0], 2.2, bp[1] - 6);
+      // r9: kamera DI JALAN x=0 (0,6.2,26) -> papan bank (2,7,-2). r8: kamera
+      // (11,6.2,26) menembus gedung blok (20,20) -> tembok.
+      var bp = (SB.city && SB.city.spawnPoints) ? SB.city.spawnPoints.mission : [2, 10];
+      E._camPos.set(0, 6.2, 26); E._camLook.set(2, 2.2, 4);
       E._focus.set(bp[0], 1.5, bp[1]); E.heading = 0;
       SB.state.objective = 'The Big Score — hit Solmar National Bank';
       SB.state.inSight = true;
@@ -282,6 +359,8 @@
       SB.state.objective = '';
       SB.state.inSight = false;
     }
+    // Basis jam preset -> _clockMin (advanceClock yang memajukan dari sini).
+    SB._clockMin = (SB.state.hour || 17) * 60 + (SB.state.min || 0);
     if (SB.police && SB.police.setStars) SB.police.setStars(SB.state.heat);
     return E;
   };

@@ -1,4 +1,4 @@
-// audio.js — suara prosedural WebAudio, tanpa file. B4 r8, tulis segar.
+// audio.js — suara prosedural WebAudio, tanpa file. B4 r10, tulis segar dari tree r9.
 (function () {
   'use strict';
   var SB = window.SB;

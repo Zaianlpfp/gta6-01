@@ -1,7 +1,6 @@
-// map.js — peta kota penuh Solmar Bay (M). B4 r8, tulis segar dari API.md r7.
-// Grid rapat; 9 label distrik di-clamp (Bayline Docks utuh); legenda 9 item;
-// jobs DONE/ACTIVE/LOCKED; GPS jarak ke objektif. Label digambar dua pass
-// (semua kotak dulu, baru semua label) supaya kotak tidak menutupi label.
+// map.js — peta kota penuh Solmar Bay (M). B4 r10, tulis segar dari tree r9.
+// Batas peta dihitung dari distrik; GPS baca target dari markerPos B3 +
+// objektif dari S.mission (bukan hanya M.active).
 (function () {
   'use strict';
   var SB = window.SB;
@@ -13,13 +12,7 @@
     ['Property', '#e8e8e8', '■'], ['Hospital', '#ffffff', '+'],
     ['Police', '#4f8cff', '●']
   ];
-  function el(tag, id, cls, parent) {
-    var d = document.createElement(tag);
-    if (id) d.id = id;
-    if (cls) d.className = cls;
-    if (parent) parent.appendChild(d);
-    return d;
-  }
+  function el(tag, id, cls, parent) { var d = document.createElement(tag); if (id) d.id = id; if (cls) d.className = cls; if (parent) parent.appendChild(d); return d; }
   function build() {
     if (ov) return;
     ov = el('div', 'mapov', '', null); ov.style.display = 'none';
@@ -42,36 +35,38 @@
     if (SB.missions && SB.missions.JOBS) return SB.missions.JOBS;
     return [];
   }
+  function rect(d) { return { x: (d.x0 != null ? d.x0 : d.cx - d.w / 2), z: (d.z0 != null ? d.z0 : d.cz - d.d / 2), w: (d.x1 != null ? d.x1 - d.x0 : d.w), h: (d.z1 != null ? d.z1 - d.z0 : d.d) }; }
+  function bounds() {
+    var d = (SB.city && SB.city.districts) || [];
+    if (!d.length) return { minX: -560, maxX: 470, minZ: -470, maxZ: 530 };
+    var x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, i, r;
+    for (i = 0; i < d.length; i++) { r = rect(d[i]); if (r.x < x0) x0 = r.x; if (r.x + r.w > x1) x1 = r.x + r.w; if (r.z < z0) z0 = r.z; if (r.z + r.h > z1) z1 = r.z + r.h; }
+    return { minX: x0 - 30, maxX: x1 + 30, minZ: z0 - 30, maxZ: z1 + 30 };
+  }
   function activeJob() {
+    var act = null, sm = SB.state.mission || null;
     if (SB.missions) {
       var a = SB.missions.active;
-      if (typeof a === 'function') { try { return a() || null; } catch (e) { return null; } }
-      if (a && typeof a === 'object') return a;
+      if (typeof a === 'function') { try { act = a() || null; } catch (e) { act = null; } }
+      else if (a && typeof a === 'object') act = a;
     }
-    return SB.state.mission || null;
+    if (!act && !sm) return null;
+    var tgt = null;
+    if (SB.missions && typeof SB.missions.markerPos === 'function') { try { tgt = SB.missions.markerPos() || null; } catch (e) {} }
+    if (!tgt && act && act.target) tgt = act.target;
+    if (!tgt && sm && sm.target) tgt = sm.target;
+    return { id: (act && act.id) || (sm && sm.id), name: (act && act.name) || (sm && sm.title),
+      objective: (act && act.objective) || (sm && sm.objective) || SB.state.objective || '', target: tgt };
   }
   function heroPos() {
-    if (SB.engine && typeof SB.engine.heroPos === 'function') {
-      try { var p = SB.engine.heroPos(); if (p) return { x: p[0], z: p[1] }; } catch (e) {}
-    }
-    if (SB.player && typeof SB.player.pos === 'function') {
-      try { var q = SB.player.pos(); if (q) return { x: q[0], z: q[1] }; } catch (e) {}
-    }
-    if (SB.world && SB.world.player && SB.world.player.pos) return { x: SB.world.player.pos.x, z: SB.world.player.pos.z };
+    if (SB.engine && typeof SB.engine.heroPos === 'function') { try { var p = SB.engine.heroPos(); if (p) return { x: p[0], z: p[1] }; } catch (e) {} }
+    if (SB.player && typeof SB.player.pos === 'function') { try { var q = SB.player.pos(); if (q) return { x: q[0], z: q[1] }; } catch (e) {} }
     return null;
-  }
-  function rect(d) {
-    return {
-      x: (d.x0 != null ? d.x0 : d.cx - d.w / 2), z: (d.z0 != null ? d.z0 : d.cz - d.d / 2),
-      w: (d.x1 != null ? d.x1 - d.x0 : d.w), h: (d.z1 != null ? d.z1 - d.z0 : d.d)
-    };
   }
   function render() {
     build();
     if (!ctx) return;
-    var W = 760, H = 620, pad = 14;
-    var b = { minX: -560, maxX: 470, minZ: -470, maxZ: 530 };
-    if (SB.world && SB.world.bounds) b = SB.world.bounds;
+    var W = 760, H = 620, pad = 14, b = bounds();
     var sc = Math.min((W - pad * 2) / (b.maxX - b.minX), (H - pad * 2) / (b.maxZ - b.minZ));
     var ox = pad + ((W - pad * 2) - (b.maxX - b.minX) * sc) / 2;
     var oy = pad + ((H - pad * 2) - (b.maxZ - b.minZ) * sc) / 2;
@@ -79,7 +74,7 @@
     function py(z) { return oy + (z - b.minZ) * sc; }
     ctx.fillStyle = '#0a121c'; ctx.fillRect(0, 0, W, H);
     var i, d, r;
-    var dists = (SB.city && SB.city.districts) || (SB.world && SB.world.districts) || [];
+    var dists = (SB.city && SB.city.districts) || [];
     for (i = 0; i < dists.length; i++) {
       d = dists[i]; r = rect(d);
       ctx.fillStyle = d.tint || '#16283a';
@@ -97,15 +92,12 @@
       ctx.fillText(d.name, lx, ly);
     }
     ctx.shadowBlur = 0;
-    var roads = (SB.city && SB.city.roads) || (SB.world && SB.world.roads) || [];
+    var roads = (SB.city && SB.city.roads) || [];
     ctx.strokeStyle = '#46586a'; ctx.lineWidth = 3;
     for (i = 0; i < roads.length; i++) {
-      r = roads[i];
-      ctx.beginPath();
-      if (r.axis) {
-        if (r.axis === 'z') { ctx.moveTo(px(r.at), py(r.from)); ctx.lineTo(px(r.at), py(r.to)); }
-        else { ctx.moveTo(px(r.from), py(r.at)); ctx.lineTo(px(r.to), py(r.at)); }
-      } else { ctx.moveTo(px(r.x0), py(r.z0)); ctx.lineTo(px(r.x1), py(r.z1)); }
+      r = roads[i]; ctx.beginPath();
+      if (r.axis) { if (r.axis === 'z') { ctx.moveTo(px(r.at), py(r.from)); ctx.lineTo(px(r.at), py(r.to)); } else { ctx.moveTo(px(r.from), py(r.at)); ctx.lineTo(px(r.to), py(r.at)); } }
+      else { ctx.moveTo(px(r.x0), py(r.z0)); ctx.lineTo(px(r.x1), py(r.z1)); }
       ctx.stroke();
     }
     function dot(x, z, c, rad) { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(px(x), py(z), rad, 0, 6.2832); ctx.fill(); }
@@ -114,7 +106,7 @@
       ctx.fillStyle = '#ffd23f'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
       ctx.fillText('$', px(bp[0]), py(bp[2]) + 5);
     }
-    var sp = (SB.city && SB.city.spawnPoints) || (SB.world && SB.world.spawns) || {};
+    var sp = (SB.city && SB.city.spawnPoints) || {};
     if (sp.safehouse) dot(sp.safehouse.x != null ? sp.safehouse.x : sp.safehouse[0], sp.safehouse.z != null ? sp.safehouse.z : sp.safehouse[1], '#39d95e', 6);
     var tgt = null, act = activeJob();
     if (act && act.target) tgt = act.target;
@@ -123,15 +115,11 @@
       ctx.save(); ctx.translate(px(tx), py(tz)); ctx.rotate(0.7854);
       ctx.fillStyle = '#ff5f5f'; ctx.fillRect(-5, -5, 10, 10); ctx.restore();
     }
-    var cops = (SB.police && SB.police.cops) || (SB.world && SB.world.police) || [];
-    for (i = 0; i < cops.length; i++) {
-      var p = cops[i];
-      if (p.pos) dot(p.pos.x, p.pos.z, '#4f8cff', 4);
-      else if (typeof p.x === 'number') dot(p.x, p.z, '#4f8cff', 4);
-    }
+    var cops = (SB.police && SB.police.cops) || [];
+    for (i = 0; i < cops.length; i++) { var p = cops[i]; if (p.pos) dot(p.pos.x, p.pos.z, '#4f8cff', 4); else if (typeof p.x === 'number') dot(p.x, p.z, '#4f8cff', 4); }
     var hp = heroPos();
     if (hp) {
-      var hd = (SB.world && SB.world.player && SB.world.player.heading) || (SB.vehicles && SB.vehicles.active && SB.vehicles.active.heading) || 0;
+      var hd = (SB.vehicles && SB.vehicles.active && SB.vehicles.active.heading) || 0;
       ctx.save(); ctx.translate(px(hp.x), py(hp.z)); ctx.rotate(-hd);
       ctx.fillStyle = '#ffffff';
       ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(6, 7); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill();
@@ -154,9 +142,7 @@
     var lg = document.getElementById('map-legend');
     if (lg) {
       var lh2 = '';
-      LEGEND.forEach(function (g) {
-        lh2 += '<div class="map-leg"><span style="color:' + g[1] + '">' + g[2] + '</span> ' + g[0] + '</div>';
-      });
+      LEGEND.forEach(function (g) { lh2 += '<div class="map-leg"><span style="color:' + g[1] + '">' + g[2] + '</span> ' + g[0] + '</div>'; });
       lg.innerHTML = lh2;
     }
     var gps = document.getElementById('map-gps');
@@ -167,6 +153,7 @@
         var dx = tx2 - hp.x, dz = tz2 - hp.z;
         gtxt = 'GPS: objective ' + Math.round(Math.sqrt(dx * dx + dz * dz)) + ' m away';
       } else if (act && act.objective) gtxt = 'GPS: ' + act.objective;
+      else if (SB.state.objective) gtxt = 'GPS: ' + SB.state.objective;
       gps.textContent = gtxt;
     }
   }

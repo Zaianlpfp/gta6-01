@@ -1,8 +1,39 @@
-# API.md — Kontrak antar modul "Solmar Bay" (gta6-01, rebuild r8)
+# API.md — Kontrak antar modul "Solmar Bay" (gta6-01, rebuild r10)
 
-Ditulis B1 di dalam recording r8, SEBELUM engine/city. B2–B5 membaca file ini
+Ditulis B1 di dalam recording r10, SEBELUM engine/city. B2–B5 membaca file ini
 (bukan source lama) sebagai satu-satunya kontrak. B5 memindahkan file ini ke repo
 root sebelum main.ts dijalankan (jangan masuk dossier).
+
+Perubahan r10 vs r9 (alasan: r9 seal mati restart VM 01:34 WIB; B2 r9 menemukan
+clamp dt 0,05 bikin sim live 10–20x lebih lambat dari wall time; B3 r9 menemukan
+SB.registerUpdate tidak pernah didefinisikan; B4 r9 menemukan kamera onfoot
+masih memfilm tembok ~40% frame):
+- `SB.registerUpdate(fn)` DIDEFINISIKAN engine.js (lihat §3) — dipanggil
+  `step()` tiap frame. Di r9 tidak ada yang mendefinisikannya (hanya hud.js
+  yang memanggil, dengan guard) — itu akar HUD beku.
+- dt LIVE LOOP = wall-clock, CAP 1,0 detik (BUKAN 0,05). Berlaku untuk loop
+  internal engine (boot/start) DAN loop main.js. ⚠️ main.js:19 r9 masih
+  `if (dt > 0.05) dt = 0.05;` — file itu milik B5, B5 r10 / integrator WAJIB
+  ubah ke 1,0, kalau tidak sim live tetap jalan 10–20x lambat di headless.
+  Staging / stepping manual tetap pakai dt tetap 1/60 (deterministik).
+- Koridor jalan showcase (x=0, x=40) DILEBARKAN: bangunan yang menghadap
+  jalan dipaksa lebar ≤11 (fasad ≥7,5 dari sumbu jalan; r9 fasad 4,5 → tembok
+  makan ~40% frame onfoot). Kamera onfoot: pos (40,6.0,78), look (40,1.2,56).
+
+Perubahan r9 vs r8 (juri buta r8 21 vs 32 — dunia beku, jam mentok,
+kamera tembok, sorot heli memutihkan papan bank):
+- Jam HUD kini hidup: `SB._clockMin` dimajukan `engine.step()` (1 detik sim =
+  1 menit game, sama seperti v3); hour/min/timeLabel diturunkan tiap step.
+- `engine.step()` juga memanggil `SB.police.update(dt)` bila ada — SATU-SATUNYA
+  pemanggil (main.js JANGAN panggil police.update; double-step). Di r8 tidak
+  ada yang memanggil police.update sehingga heli/cruiser diam di live loop.
+- Ped ambient digerakkan `engine.step()` dari simTime (pure function, tetap
+  deterministik); traffic V.traffic sudah bergerak via wrap B2.
+- Kamera preset onfoot/mission DIPINDAH ke koridor jalan (sightline bebas
+  gedung): onfoot (40,62), mission (0,10). Di r8 kamera onfoot (69,76) dan
+  mission (11,26) berada di dalam/di balik footprint gedung → tembok.
+- Cone sorot heli: opacity 0.25 → 0.10, radius 7 → 5, tinggi 42 → 36 —
+  papan "SOLMAR NATIONAL BANK" harus tetap terbaca di frame cover.
 
 ## 0. Global & aturan dasar
 
@@ -10,6 +41,12 @@ root sebelum main.ts dijalankan (jangan masuk dossier).
 - **Determinisme:** TIDAK ADA `Math.random` / `Date.now` di kode game. Semua acak
   lewat `SB.rng()` (mulberry32, seed tetap, lihat §1). `SB.state.simTime` adalah
   satu-satunya jam simulasi; naik `dt` tiap `step()`.
+- **Jam HUD:** `SB._clockMin` = menit sejak 00:00 (basis per preset, mis. cover
+  17*60+24). `engine.step()` memajukan `_clockMin += dt * SB.state.clockRate`
+  (`clockRate = 1`, 1 detik sim = 1 menit game — sama seperti v3), lalu
+  `hour = floor(_clockMin/60)`, `min = floor(_clockMin%60)`, `timeLabel` dari
+  hour (NIGHT 20–05, SUNSET 17–19, DAY 06–16). `setPreset()` mengatur basis jam.
+  HUD membaca `SB.state.hour/min` — JANGAN set jam langsung di luar engine.
 - **Heat = bintang 0–5** (integer). `SB.police.stars()` otoritatif; `SB.state.heat`
   mirror yang sama. JANGAN pakai skala 0–100.
 - **Uang 3 ledger:** `SB.cash` (0), `SB.player.cash` (500), `SB.missions.cash` (0).
@@ -28,7 +65,7 @@ root sebelum main.ts dijalankan (jangan masuk dossier).
 
 - `SB.rng(seed)` → fungsi `() => [0,1)` (mulberry32). Seed default `1337`.
 - `SB.rand` = instance default `SB.rng(1337)`; dipakai SEMUA penempatan kota /
-  traffic / peds. `SB.randRange(a,b)`, `SB.randPick(arr)`, `SB.randInt(a,b)`.
+  traffic / peds. `SB.randRange(a,b)`, `SB.randInt(a,b)`, `SB.randPick(arr)`.
 - Reset: panggil `SB.rngReset()` sebelum build kota agar build 2× identik.
 
 ## 2. `SB.state` — state global
@@ -38,6 +75,7 @@ SB.state = {
   paused:false, heat:0, rep:0, cash:0,
   day:1, hour:17, min:24,            // jam HUD "FRI 17:24 · DAY 1 · SUNSET"
   timeLabel:'SUNSET',               // SUNSET | NIGHT | DAY
+  clockRate:1,                      // 1 detik sim = 1 menit game (v3)
   simTime:0,                        // detik simulasi, naik di step()
   preset:'cover',                   // cover | onfoot | mission | map | free
   speedKmh:0,                       // kecepatan kendaraan aktif (HUD)
@@ -46,6 +84,7 @@ SB.state = {
   objective:'',                     // teks objektif aktif (HUD + minimap)
   staging:false,                    // true saat ambil screenshot staging
 }
+// SB._clockMin — menit sejak 00:00 (bukan bagian state; dimajukan step()).
 ```
 
 ## 3. `SB.engine` — Three.js, loop, kamera, efek (engine.js, milik B1)
@@ -58,21 +97,48 @@ SB.state = {
   mission|map` (+ `heat`, `hour`), lalu `boot()` + `setPreset()`.
 - `SB.engine.stop()` — hentikan loop internal (wajib dipanggil main.js sebelum
   loop sendiri). `SB.engine.start()` — nyalakan lagi (opsional).
+- **`SB.registerUpdate(fn)` — DIDEFINISIKAN engine.js (r10, BARU).** Daftar
+  callback yang dipanggil `E.step(dt)` SETIAP tick, SETELAH simTime/jam/police/
+  ped/flash dimajukan dan SEBELUM render — supaya HUD dan modul lain selalu
+  membaca state terbaru. Daftarkan sekali saja (duplikat diabaikan); panggil
+  balik dengan `dt`; error di satu callback tidak boleh menghentikan yang lain
+  (try/catch per callback). `SB.unregisterUpdate(fn)` melepasnya.
+  `SB.hud.init()` mendaftarkan `update()` lewat sini (hud.js r9 sudah memanggil
+  dengan guard — di r9 tidak terdefinisi sehingga no-op). HUD r9 JUGA punya loop
+  rAF sendiri yang memanggil `update()` — pemanggilan ganda per frame AMAN
+  (update idempotent, tulis DOM yang sama) dan bukan bug.
 - `SB.engine.step(dt)` — SATU tick simulasi + render. Dipanggil main loop
-  (atau staging) dengan `dt = 1/60`. Isi: `simTime += dt`; gerak awan (deterministik
-  dari `simTime`); update kamera chase (ikut `SB.player.hero` atau kendaraan aktif
-  `SB.vehicles.active` bila ada); decay muzzle-flash pool; `renderer.render()`.
-  TIDAK ADA `advanceSim` — staging mengulang `step(1/60)` ~90× lalu
-  `SB.missions.update(1/60)` tiap langkah.
+  (atau staging) dengan `dt` wall-clock (live) atau `1/60` (staging manual).
+  **dt LIVE = wall-clock, CAP 1,0 detik** (r10 — r9 clamp 0,05 bikin sim live
+  10–20x lebih lambat dari wall di headless ~1fps: 10 detik W-hold cuma majukan
+  simTime 0,47 detik). Modul B2 sudah menangani dt sampai 1,0 detik. JANGAN
+  kembalikan clamp 0,05 di loop mana pun (engine boot/start DAN main.js).
+  Isi, BERURUTAN: `simTime += dt`; majukan jam (`_clockMin += dt*clockRate`,
+  turunkan hour/min/timeLabel); gerak awan (deterministik dari `simTime`);
+  gerak ped ambient (pure function dari `simTime`, lihat §4); panggil
+  `SB.police.update(dt)` bila ada (SATU-SATUNYA pemanggil — main.js dan wrap B2
+  JANGAN panggil police.update); decay muzzle-flash pool; panggil SEMUA
+  callback `SB.registerUpdate` (lihat di atas); update kamera chase
+  (ikut `SB.player.hero` atau kendaraan aktif `SB.vehicles.active` bila ada);
+  `renderer.render()`. TIDAK ADA `advanceSim` — staging mengulang `step(1/60)`
+  ~90× lalu `SB.missions.update(1/60)` tiap langkah.
 - `SB.engine.setPreset(name, opts)` — staging preset. Modul lain BOLEH me-wrap
   fungsi ini berantai (panggil versi sebelumnya dulu). Preset:
   - `cover`: hero di mobil pink `(0,0,0)`, kamera chase belakang-kanan rendah
     supaya mobil pink UTUH (tidak tertutup cruiser), `heat=4`, jam 17:24 SUNSET,
-    heli + cone dalam frame, traffic + peds padat.
-  - `onfoot`: hero jalan kaki di Old Mercado, `heat=2`, kamera bahu; tanah diisi
-    props/palm/mobil parkir/marka (bukan tanah kosong).
-  - `mission` ("big-score"): di depan bank, `heat=5`, heli cone terlihat,
-    foreground terisi props/palm/mobil parkir/marka, sign bank utuh.
+    heli + cone dalam frame, traffic + peds padat. Kamera TETAP r8:
+    pos (10.5,5.4,19.5), look (-0.5,1.6,-4) — sightline ini bersih dari gedung.
+  - `onfoot`: hero jalan kaki di Old Mercado, `heat=2`, jam 18:05 SUNSET.
+    Spawn (40,62) DI JALAN x=40 (bukan (60,62) — itu di dalam footprint gedung
+    blok (60,60)). Kamera DI JALAN yang sama: pos (40,6.0,78), look (40,1.2,56)
+    — sightline lurus menyusuri jalan x=40, bebas gedung; hero + stall pasar +
+    mobil parkir terlihat, BUKAN tembok. (r10: koridor dilebarkan — lihat §4 —
+    fasad kini ≥7,5 dari sumbu jalan; r9 fasad 4,5 → tembok makan ~40% frame.)
+  - `mission` ("big-score"): di depan bank, `heat=5`, jam 17:48 SUNSET, heli
+    cone terlihat, foreground terisi props/palm/mobil parkir/marka, sign bank
+    utuh. Spawn (2,10) di tepi jalan x=0. Kamera DI JALAN x=0: pos (0,6.2,26),
+    look (2,2.2,4) — sightline lurus menyusuri jalan x=0 ke arah papan bank
+    (2,7,-2); BUKAN (11,6.2,26) r8 yang menembus gedung blok (20,20).
   - `map`: kamera top-down; peta 2D digambar `SB.map` (bukan engine).
   - `free`: bebas, `heat=0`.
 - `SB.engine.shot()` → `string` data-URL JPEG (`canvas.toDataURL('image/jpeg',
@@ -84,8 +150,9 @@ SB.state = {
 - `SB.engine.muzzlePos` — `THREE.Vector3` posisi moncong senjata aktif; B2
   update tiap tembakan, lalu panggil `SB.engine.burst(...)` di titik itu.
 - `SB.engine.spotCone()` → `THREE.Mesh` cone spotlight siap pakai: material
-  transparan **opacity 0.25**, warna kuning pucat, `side: DoubleSide`,
-  `depthWrite:false`. Dipakai heli polisi (B2) — JANGAN ubah opacity.
+  transparan **opacity 0.10 (r9; r8 0.25 memutihkan papan bank)**, warna kuning
+  pucat, `side: DoubleSide`, `depthWrite:false`. Cone r9: radius 5, tinggi 36
+  (r8: 7/42). Dipakai heli polisi (B2) — JANGAN ubah opacity.
 - `SB.engine.sun` — directional light matahari. Posisi TETAP
   `(-8, 150, -420)` di semua preset sunset (jangan digeser).
 - `SB.engine.camera`, `SB.engine.scene`, `SB.engine.renderer`,
@@ -108,8 +175,9 @@ SB.state = {
   dan `SB.missions` (lokasi misi).
 - `SB.city.roads` — daftar ruas jalan `{x0,z0,x1,z1}` (sumbu grid). Dipakai
   traffic (B2) + spawn.
-- `SB.city.spawnPoints = { cover:[0,0], onfoot:[x,z], mission:[x,z], ... }`
-  titik spawn tiap preset (dipakai `setPreset` + B2).
+- `SB.city.spawnPoints = { cover:[0,0], onfoot:[40,62], mission:[2,10], ... }`
+  titik spawn tiap preset (dipakai `setPreset` + B2). onfoot r9 = (40,62) di
+  jalan x=40 (r8 (60,62) di dalam gedung — JANGAN kembalikan).
 - `SB.city.bank = { pos:[2,7,-2], rotY:Math.PI/4 }` — sign
   "SOLMAR NATIONAL BANK" (canvas texture **2048×512**, teks UTUH tidak terpotong)
   di gedung bank. Posisi + rotasi TETAP ini (deviasi r5 yang terbukti benar).
@@ -118,8 +186,22 @@ SB.state = {
   [-5,-6]/[5.5,-4] — itu menempel kamera). Mobil pink harus tetap utuh.
 - `SB.city.groundAt(x, z)` → `y` tanah (0 di jalan/trotoar; dipakai player/peds).
 - `SB.city.nearBank(x, z)` → bool (dalam radius bank; dipakai staging mission).
-- `SB.city.makeTextSprite(text, opts)` → `THREE.Sprite` label neon (dipakai
-  city untuk sign; B2/B4 boleh pakai untuk label lain).
+- `SB.city.peds` — 20 pejalan kaki; tiap ped menyimpan `userData.bx/bz`
+  (posisi dasar), `userData.axis` ('x'|'z', sumbu trotoar), `userData.sp`
+  (kecepatan jalan, dari walkPhase — TANPA rand baru), `userData.walkPhase`.
+  `engine.step()` menggerakkan mereka: posisi sepanjang sumbu =
+  `base + sin(simTime*0.22*sp + walkPhase) * 6` (+ bob kecil) — pure function
+  dari simTime, deterministik. JANGAN gerakkan ped di luar step().
+- **Koridor showcase dilebarkan (r10):** bangunan yang menghadap jalan x=0
+  atau x=40 dipaksa lebar ≤11 (clamp SETELAH rand — stream rand tetap sama,
+  kota lain identik; jumlah gedung tetap 71). Fasad kini ≥7,5 dari sumbu jalan
+  (r9: 4,5) — jalan terbaca sebagai jalan, bukan ngarai tembok. Yang di-clamp:
+  blok (bx=20,k=1) & (bx=60,k=0) menghadap x=40; blok (bx=-20,k=1) &
+  (bx=20,k=0) menghadap x=0. Gedung bank (bx=20,bz=-20,k=0) TIDAK berubah
+  ukuran akhir (diskala 26×14×14 setelah clamp).
+- Foreground on-foot r9 (di tepi jalan x=40, BUKAN di dalam gedung blok
+  (60,60)): stall di (44,54)/(44,62)/(44,70), mobil parkir (36,58)/(36,68),
+  palm (46,50)/(46,74). Foreground big-score tetap di sekitar (2,10).
 
 ## 5. `SB.player` — jalan kaki + kendaraan (player.js, milik B2)
 
@@ -148,9 +230,12 @@ SB.state = {
 - `SB.police.stars()` → int 0–5 (otoritatif). `SB.police.setStars(n)`.
 - `SB.police.response` — `[{name, dist, status}]` unit merespons (HUD).
 - `SB.police.heli` — mesh heli AIR-1 / GULL-1: badan + rotor + tail + lampu,
-  BUKAN siluet blok hitam; cone dari `SB.engine.spotCone()` (opacity 0.25)
+  BUKAN siluet blok hitam; cone dari `SB.engine.spotCone()` (opacity 0.10)
   mengarah ke hero dan TERLIHAT di frame cover/mission.
 - `SB.police.update(dt)` — kejar hero, naikkan/turunkan heat, gerak heli + cone.
+  DIPANGGIL `SB.engine.step()` tiap tick (SATU-SATUNYA pemanggil — main.js dan
+  wrap B2 JANGAN memanggilnya; di r8 tidak ada yang memanggil sehingga heli
+  dan cruiser diam di live loop).
 - `SB.police.cops` — foot cops; `userData.boss=true` + `userData.enforcer=true`
   WAJIB ada pada ped boss/enforcer misi (tanpa flag ini mereka TIDAK BISA
   dibunuh via combat — bug r5, jangan diulang).
@@ -170,6 +255,8 @@ SB.state = {
   `userData.boss=true` tumbang (counter standoff turun; Saltjack 4→3).
 - `SB.missions.marker` — marker objektif: BERLIAN MERAH **KECIL** (jangan raksasa).
 - `SB.missions.active` — misi aktif `{id, name, objective, timer}`.
+- r9: `M.getHUD()` / `M.getGPS()` / `notifyHUD()` — panel misi + GPS hidup
+  (panggil `SB.hud.update()` + `SB.map.render()` langsung tiap transisi).
 
 ## 9. `SB.dialog` — dialog + potret (dialog.js, milik B3)
 
@@ -200,6 +287,24 @@ SB.state = {
 
 - `node --check` engine.js + city.js. 0× `Math.random` / `Date.now` (grep).
 - Determinisme STATE 2×: jalankan preset cover 2× (step 1/60 ×90) → hero,
-  speed, heat, counts bangunan/traffic/peds HARUS identik.
+  speed, heat, counts bangunan/traffic/peds, jam (`_clockMin`), posisi kamera
+  HARUS identik.
+- **registerUpdate (r10, BARU):** `typeof SB.registerUpdate === 'function'`;
+  callback terdaftar dipanggil tiap `step()` (hitung panggilan 2× step = 2×
+  dipanggil); duplikat diabaikan; error di callback tidak menghentikan step.
+- **dt live (r10, BARU):** loop rAF engine (E.start) maju ~1 detik sim per
+  1 detik wall (ukur simTime t0 vs t+10 detik wall — HARUS naik ~10 detik sim,
+  BUKAN ~0,5 seperti clamp 0,05). Jam HUD maju ≥1 menit per ~1 detik wall
+  (clockRate 1). ⚠️ Halaman index.html (loop main.js) MASIH clamp 0,05 sampai
+  B5 r10 / integrator ubah main.js:19 → 1,0 — ukur dan laporkan angkanya
+  sebagai bukti, jangan disembunyikan.
+- Pixel-diff (bukti loop hidup — WAJIB, bukan state saja): load live
+  `?scene=cover` headless, TANPA stepping manual: baca simTime + jam + posisi
+  traffic V.traffic[0] di t0, tunggu 10 detik wall, baca lagi → simTime HARUS
+  naik, traffic HARUS berpindah; pixel-diff shot() t0 vs t10 HARUS > threshold
+  (diukur in-page, downsample 160×90, mean abs diff + % piksel berubah).
+  Jam HUD maju ≥1 menit per ~30 detik wall headless (clockRate 1, headless
+  ~1–2 fps — sama seperti v3). Screenshot onfoot + mission HARUS menampilkan
+  hero + jalan (varians piksel region tengah, bukan warna tembok seragam).
 - SATU render kecil ≤640×360 (headless shell + swiftshader, file:// saja;
   127.0.0.1 diblokir proxy). 0 console/page error. `SB.engine.shot()` jalan.

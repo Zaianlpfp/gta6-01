@@ -1,4 +1,4 @@
-// save.js — save/load Solmar Bay (localStorage). B4 r8, tulis segar.
+// save.js — save/load Solmar Bay (localStorage). B4 r10, tulis segar dari tree r9.
 (function () {
   'use strict';
   var SB = window.SB;
@@ -6,10 +6,8 @@
   function key(slot) { return KEY + ':' + (slot == null ? 0 : slot); }
   function save(slot) {
     var s = SB.state;
-    var data = {
-      v: 1, savedSim: s.simTime || 0, missionsDone: s.missionsDone || 0, pos: null,
-      state: (typeof SB.serializeState === 'function') ? SB.serializeState() : JSON.parse(JSON.stringify(s))
-    };
+    var data = { v: 1, savedSim: s.simTime || 0, missionsDone: s.missionsDone || 0, pos: null,
+      state: (typeof SB.serializeState === 'function') ? SB.serializeState() : JSON.parse(JSON.stringify(s)) };
     if (SB.world && SB.world.player && SB.world.player.pos)
       data.pos = { x: SB.world.player.pos.x, z: SB.world.player.pos.z, heading: SB.world.player.heading || 0, onFoot: !!SB.world.player.onFoot };
     try {
@@ -27,9 +25,7 @@
     if (!data || !data.state) return false;
     var k;
     for (k in data.state) if (Object.prototype.hasOwnProperty.call(data.state, k)) SB.state[k] = data.state[k];
-    if (data.pos && SB.player && typeof SB.player.setPosition === 'function') {
-      try { SB.player.setPosition(data.pos.x, data.pos.z, data.pos.heading); } catch (e) {}
-    }
+    if (data.pos && SB.player && typeof SB.player.setPosition === 'function') { try { SB.player.setPosition(data.pos.x, data.pos.z, data.pos.heading); } catch (e) {} }
     if (typeof SB.setWanted === 'function') SB.setWanted(SB.state.wanted || 0);
     if (typeof SB.emit === 'function') SB.emit('loaded', { slot: slot == null ? 0 : slot });
     return true;

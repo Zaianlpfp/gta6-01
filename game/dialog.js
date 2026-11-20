@@ -1,4 +1,4 @@
-/* dialog.js — dialog + potret karakter "Solmar Bay" (gta6-01, rebuild r8).
+/* dialog.js — dialog + potret karakter "Solmar Bay" (gta6-01, rebuild r10).
    Kontrak: game/API.md §9. say() INSTAN (tanpa typewriter) di #dlg
    KIRI-BAWAH (wheel kanan-bawah — jangan menimpa). show() = say + pause.
    Jangan tumpuk 2 show() berurutan: show() mengganti isi yang sama. */

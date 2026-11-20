@@ -1,6 +1,5 @@
-// player.js — Solmar Bay r8 (B2): hero on-foot, combat, weapons. Fresh write.
-// Weapon table drives the harness numbers: pistol 34 dmg -> boss 220hp dies on the
-// 7th shot (34*6=204 < 220 <= 34*7); shotgun 120 dmg -> 2 shots kill (240 >= 220).
+// player.js — Solmar Bay r10 (B2). r10: retype r9; B2 OWNS SB.input (r8: none existed, speed stuck 0);
+// movement substeps full wall dt. Pistol 34 -> boss dies 7th shot; shotgun 120 -> 2 shots.
 var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
 var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
 var WEAPONS={
@@ -13,15 +12,24 @@ var WALK=4,RUN=7;
 function _clamp(v,a,b){return v<a?a:v>b?b:v;}
 function _angDiff(a,b){var d=b-a;while(d>Math.PI)d-=Math.PI*2;while(d<-Math.PI)d+=Math.PI*2;return d;}
 function _fwd(h){return{x:-Math.sin(h),z:-Math.cos(h)};}
-function _inputAxis(){var i=SB.input||{};
-if(typeof i.axis==='function')return i.axis();
-var k=i.keys||{},x=0,y=0;
+// Input (B2 owns it); a harness-provided SB.input is kept as-is.
+SB.input=SB.input||{};
+var IN=SB.input;
+IN.keys=IN.keys||{};IN.mouse=IN.mouse||{down:false};
+if(typeof IN.axis!=='function')IN.axis=function(){var k=IN.keys,x=0,y=0;
 if(k.KeyD||k.ArrowRight)x+=1;if(k.KeyA||k.ArrowLeft)x-=1;
-if(k.KeyW||k.ArrowUp)y+=1;if(k.KeyS||k.ArrowDown)y-=1;return{x:x,y:y};}
-function _isDown(c){var i=SB.input||{};
-if(typeof i.isDown==='function')return i.isDown(c);
-return!!(i.keys&&i.keys[c]);}
-// Collision: prefer SB.isBlocked, else scan city colliders/buildings (AABB or center box).
+if(k.KeyW||k.ArrowUp)y+=1;if(k.KeyS||k.ArrowDown)y-=1;return{x:x,y:y};};
+if(typeof IN.isDown!=='function')IN.isDown=function(c){return!!IN.keys[c];};
+if(typeof document!=='undefined'&&document.addEventListener&&!SB._b2input){
+SB._b2input=true;
+function _kd(e){IN.keys[e.code]=e.type==='keydown';}
+function _md(e){IN.mouse.down=e.type==='mousedown';}
+document.addEventListener('keydown',_kd);
+document.addEventListener('keyup',_kd);
+document.addEventListener('mousedown',_md);
+document.addEventListener('mouseup',_md);
+if(typeof window!=='undefined'&&window.addEventListener)
+window.addEventListener('blur',function(){for(var k in IN.keys)IN.keys[k]=false;});}
 SB._blocked=SB._blocked||function(x,z){
 if(typeof SB.isBlocked==='function'){try{return SB.isBlocked(x,z,1.2);}catch(e){}}
 var c=SB.city&&(SB.city.colliders||SB.city.buildings);
@@ -77,8 +85,6 @@ if((preset==='cover'||preset==='mission')&&SB.vehicles&&SB.vehicles.pinkCar){
 var pc=SB.vehicles.pinkCar;pc.pos.x=x;pc.pos.z=z;pc.heading=0;
 pc.mesh.position.set(x,0,z);pc.mesh.rotation.y=0;P.enterVehicle(pc);}
 P._sync();P._installWrap();return P.hero;};
-// Stealing a parked car the hero does not own costs +1 star. The pink car is
-// owned from spawnParked, so entering it never raises heat (cover stays at 4).
 P.enterVehicle=function(v){if(!v||!P.hero)return false;
 if(v.parked&&SB.vehicles&&!SB.vehicles._owned[v.id]){
 SB.vehicles._owned[v.id]=1;
@@ -156,23 +162,27 @@ if(killed){t.grp.visible=false;
 if(t.ud.boss&&SB.missions&&typeof SB.missions.standoffDown==='function')
 SB.missions.standoffDown();}
 return{hit:true,killed:killed,dmg:dmg,boss:!!t.ud.boss,enforcer:!!t.ud.enforcer};}
-P._pressed=function(c){var d=_isDown(c),was=P._prev[c];P._prev[c]=d;return d&&!was;};
-P._tick=function(dt){if(!P.hero)return;dt=_clamp(dt||0,0,.05);P._cool-=dt;
-if(_isDown('Digit1'))P.selectWeapon(1);if(_isDown('Digit2'))P.selectWeapon(2);
-if(_isDown('Digit3'))P.selectWeapon(3);if(_isDown('Digit4'))P.selectWeapon(4);
+P._pressed=function(c){var d=IN.isDown(c),was=P._prev[c];P._prev[c]=d;return d&&!was;};
+// Substep full wall dt in 1/60 slices (r8 clamped dt to 0.05: at 1fps sim ran 20x slow).
+// Discrete input once per call; at dt=1/60 identical to r8.
+P._tick=function(dt){if(!P.hero)return;
+var D=dt||0;if(D>1)D=1;if(D<0)D=0;P._cool-=D;
+if(IN.isDown('Digit1'))P.selectWeapon(1);if(IN.isDown('Digit2'))P.selectWeapon(2);
+if(IN.isDown('Digit3'))P.selectWeapon(3);if(IN.isDown('Digit4'))P.selectWeapon(4);
 if(P._pressed('KeyR'))P.reload();
 if(P._pressed('KeyE')){if(P.onFoot()){
 var nv=SB.vehicles?SB.vehicles.nearest(P._px,P._pz,4.5):null;
 if(nv)P.enterVehicle(nv);}else P.exitVehicle();}
-var ax=_inputAxis();
-if(P.onFoot()){var run=_isDown('ShiftLeft')||_isDown('ShiftRight'),sp=run?RUN:WALK;
+var ax=IN.axis(),rem=D;
+while(rem>1e-9){var h=rem>1/60?1/60:rem;rem-=h;
+if(P.onFoot()){var run=IN.isDown('ShiftLeft')||IN.isDown('ShiftRight'),sp=run?RUN:WALK;
 var f=_fwd(P._heading),r={x:Math.cos(P._heading),z:-Math.sin(P._heading)};
 var dx=f.x*ax.y+r.x*ax.x,dz=f.z*ax.y+r.z*ax.x;
 var len=Math.sqrt(dx*dx+dz*dz),moving=len>0.05;
 if(moving){dx/=len;dz/=len;
 var nh=Math.atan2(-dx,-dz);
-P._heading+=_angDiff(P._heading,nh)*Math.min(1,dt*12);
-var nx=P._px+dx*sp*dt,nz=P._pz+dz*sp*dt;
+P._heading+=_angDiff(P._heading,nh)*Math.min(1,h*12);
+var nx=P._px+dx*sp*h,nz=P._pz+dz*sp*h;
 if(!SB._blocked(nx,P._pz))P._px=nx;if(!SB._blocked(P._px,nz))P._pz=nz;
 var c=SB._clampPos(P._px,P._pz);P._px=c.x;P._pz=c.z;
 var sw=Math.sin(SB.state.simTime*9)*0.55,l=P.hero.userData.limbs;
@@ -180,17 +190,16 @@ if(l){l.legL.rotation.x=sw;l.legR.rotation.x=-sw;l.armL.rotation.x=-sw;l.armR.ro
 else{var l2=P.hero.userData.limbs;
 if(l2){l2.legL.rotation.x=0;l2.legR.rotation.x=0;l2.armL.rotation.x=0;l2.armR.rotation.x=0;}}
 P.hero.position.set(P._px,0,P._pz);P.hero.rotation.y=P._heading;}
-else if(SB.vehicles&&SB.vehicles.update)SB.vehicles.update(dt);
+else if(SB.vehicles&&SB.vehicles.update)SB.vehicles.update(h);}
 if(SB.input&&SB.input.mouse&&SB.input.mouse.down&&P._cool<=0){
 P.fire();P._cool=WEAPONS[P.weapon].rate;}
-if(SB.vehicles&&SB.vehicles._trafficTick)SB.vehicles._trafficTick(dt);
+if(SB.vehicles&&SB.vehicles._trafficTick)SB.vehicles._trafficTick(D);
 if(SB.state.preset==='cover'&&!SB._b2traf&&SB.vehicles&&SB.vehicles.spawnTraffic){
 SB._b2traf=true;SB.vehicles.spawnTraffic(24);}
 if(P.health<=0&&!P._wasted){P._wasted=true;
 if(SB.police&&SB.police.wasted)SB.police.wasted();}};
 P.update=P._tick;
-// Wrap engine.step ONCE (guard SB._b2step). main.js only calls SB.engine.step(dt);
-// and must never call P.update / PL.update separately (double-step).
+// Wrap engine.step ONCE (SB._b2step guard).
 P._installWrap=function(){if(!SB.engine||typeof SB.engine.step!=='function'||SB._b2step)return;
 SB._b2step=true;var orig=SB.engine.step;
 SB.engine.step=function(dt){P._tick(dt);return orig.call(SB.engine,dt);};};

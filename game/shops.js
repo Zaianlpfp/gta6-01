@@ -1,6 +1,5 @@
-// shops.js — toko / safehouse / respray Solmar Bay. B4 r8, tulis segar.
-// Potong SB.player.cash (ledger r7); respray $200 hapus 1 bintang via
-// SB.police.setStars (fallback SB.state.heat).
+// shops.js — toko / safehouse / respray Solmar Bay. B4 r10, tulis segar dari tree r9.
+// Potong SB.player.cash; respray $200 hapus 1 bintang; safehouse = save.
 (function () {
   'use strict';
   var SB = window.SB;
@@ -31,10 +30,7 @@
       { id: 'meal', name: 'Cafe meal — full HP', price: 60, apply: function () { setHealth(100); } }
     ]
   };
-  function cash() {
-    if (SB.player && typeof SB.player.cash === 'number') return SB.player.cash;
-    return SB.state.cash || 0;
-  }
+  function cash() { if (SB.player && typeof SB.player.cash === 'number') return SB.player.cash; return SB.state.cash || 0; }
   function pay(n) {
     if (SB.player && typeof SB.player.cash === 'number') SB.player.cash -= n;
     if (typeof SB.state.cash === 'number') SB.state.cash = Math.max(0, SB.state.cash - n);
@@ -43,33 +39,24 @@
     if (ov) return;
     ov = document.createElement('div');
     ov.id = 'shopov'; ov.style.display = 'none';
-    var h = document.createElement('div');
-    h.id = 'shop-head'; h.textContent = 'SHOP';
+    var h = document.createElement('div'); h.id = 'shop-head'; h.textContent = 'SHOP';
     ov.appendChild(h);
-    var tabs = document.createElement('div');
-    tabs.id = 'shop-tabs';
+    var tabs = document.createElement('div'); tabs.id = 'shop-tabs';
     ['weapons', 'armor', 'food'].forEach(function (k) {
       var b = document.createElement('button');
       b.textContent = k.toUpperCase(); b.dataset.kind = k;
       b.addEventListener('click', function () { open(k); });
       tabs.appendChild(b);
     });
-    var rp = document.createElement('button');
-    rp.textContent = 'RESPRAY $200 (−1★)';
-    rp.addEventListener('click', function () { respray(); });
-    tabs.appendChild(rp);
-    var sh = document.createElement('button');
-    sh.textContent = 'SAFEHOUSE (SAVE)';
-    sh.addEventListener('click', function () { safehouse(); });
-    tabs.appendChild(sh);
+    var rp = document.createElement('button'); rp.textContent = 'RESPRAY $200 (−1★)';
+    rp.addEventListener('click', function () { respray(); }); tabs.appendChild(rp);
+    var sh = document.createElement('button'); sh.textContent = 'SAFEHOUSE (SAVE)';
+    sh.addEventListener('click', function () { safehouse(); }); tabs.appendChild(sh);
     ov.appendChild(tabs);
-    listEl = document.createElement('div');
-    listEl.id = 'shop-list';
+    listEl = document.createElement('div'); listEl.id = 'shop-list';
     ov.appendChild(listEl);
-    var cl = document.createElement('button');
-    cl.id = 'shop-close'; cl.textContent = 'CLOSE [Esc]';
-    cl.addEventListener('click', close);
-    ov.appendChild(cl);
+    var cl = document.createElement('button'); cl.id = 'shop-close'; cl.textContent = 'CLOSE [Esc]';
+    cl.addEventListener('click', close); ov.appendChild(cl);
     document.body.appendChild(ov);
   }
   function open(kind) {

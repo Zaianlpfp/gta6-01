@@ -1,4 +1,4 @@
-// radio.js — 3 stasiun Solmar Bay (API.md r7 §10). B4 r8, tulis segar.
+// radio.js — 3 stasiun Solmar Bay. B4 r10, tulis segar dari tree r9.
 (function () {
   'use strict';
   var SB = window.SB;
@@ -19,9 +19,6 @@
   function prev() { return play(idx - 1); }
   function nextTrack() { track = (track + 1) % STATIONS[idx].tracks.length; apply(); return current(); }
   function toggle() { playing = !playing; apply(); return current(); }
-  function current() {
-    var s = STATIONS[idx];
-    return { station: idx, name: s.name, track: s.tracks[track], playing: playing, bpm: s.bpm, genre: s.genre };
-  }
+  function current() { var s = STATIONS[idx]; return { station: idx, name: s.name, track: s.tracks[track], playing: playing, bpm: s.bpm, genre: s.genre }; }
   SB.radio = { STATIONS: STATIONS, stations: STATIONS, play: play, next: next, prev: prev, nextTrack: nextTrack, toggle: toggle, current: current };
 })();

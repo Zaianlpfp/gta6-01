@@ -1,5 +1,6 @@
-// police.js — Solmar Bay r8 (B2): ground police + heli AIR-1/GULL-1 + wanted. Fresh write.
-// Heat is stars 0-5; SB.police.stars() is authoritative (SB.state.heat mirrors it).
+// police.js — Solmar Bay r10 (B2): police + heli AIR-1/GULL-1. Heat 0-5, stars() authoritative.
+// r10: heli hovers (10,-2) so its cone no longer whites out the bank sign. Pursuit substeps wall dt.
+// r10 FIX: fallback cone opacity 0.25 -> 0.10 (no second cone can white out the bank sign).
 var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
 var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
 var UNITS=['MARLIN-11','SNAPPER-25','TARPON-18','IBIS-43','HERON-17','KESTREL-31'];
@@ -42,7 +43,7 @@ new THREE.MeshStandardMaterial({color:0xdddddd}));sl.position.set(0,-.9,-1.8);g.
 var cone=null;
 if(SB.engine&&typeof SB.engine.spotCone==='function'){try{cone=SB.engine.spotCone();}catch(e){cone=null;}}
 if(!cone){cone=new THREE.Mesh(new THREE.ConeGeometry(6,40,24,1,true),
-new THREE.MeshBasicMaterial({color:0xfff2a0,transparent:true,opacity:.25,
+new THREE.MeshBasicMaterial({color:0xfff2a0,transparent:true,opacity:.10,
 side:THREE.DoubleSide,depthWrite:false}));}
 else{var pr=cone.geometry&&cone.geometry.parameters;
 if(pr){if(pr.height)cone.scale.y=40/pr.height;if(pr.radius){cone.scale.x=6/pr.radius;cone.scale.z=6/pr.radius;}}}
@@ -87,8 +88,7 @@ e.dist=c?dist(c.pos.x,c.pos.z):999;e.status='PURSUIT';}
 else{var idx=UNITS.indexOf(e.name),u=PL._cruisers[idx];
 if(!u){e.dist=999;e.status='PURSUIT';}
 else{e.dist=u._placed?dist(u.pos.x,u.pos.z):999;e.status=u.status;}}}};
-// REQUIRED FLAGS: boss + enforcer in userData — without them a ped CANNOT be
-// killed via combat (r5 bug, do not repeat). spawnBoss is the same function.
+// boss/enforcer userData flags REQUIRED, else peds can't be killed (r5 bug).
 PL.spawnCop=function(o){o=o||{};
 var x=o.x||0,z=o.z||0;
 var mesh=null;
@@ -110,7 +110,7 @@ PL.heli={group:g,unit:'GULL-1',pos:g.position,rotor:g.userData.rotor,
 tail:g.userData.tail,disc:g.userData.disc,status:'SPOTLIGHT'};
 return PL.heli;};
 PL.updateHeli=function(dt){if(!PL.heli)return;var hp=_heroPos(),hh=_heroHeading();
-var off=_rot(8,10,hh),tx=hp[0]+off.x,tz=hp[1]+off.z,ty=38;
+var off=_rot(10,-2,hh),tx=hp[0]+off.x,tz=hp[1]+off.z,ty=38;
 var p=PL.heli.pos,k=Math.min(1,dt*1.5);
 p.x+=(tx-p.x)*k;p.y+=(ty-p.y)*k;p.z+=(tz-p.z)*k;
 PL.heli.group.rotation.y=hh;
@@ -131,8 +131,12 @@ var f={x:-Math.sin(hh),z:-Math.cos(hh)};
 PL.roadblock.group.position.set(hx+f.x*30,0,hz+f.z*30);
 PL.roadblock.group.rotation.y=hh+Math.PI;
 PL.roadblock.cx=hx+f.x*30;PL.roadblock.cz=hz+f.z*30;};
-PL.update=function(dt){dt=_clamp(dt||0,0,.05);
+// Pursuit in 1/60 substeps (r8 clamped dt to 0.05). Spawn/despawn is idempotent, so the
+// whole body substeps safely; response sync once after. At dt=1/60 identical to r8.
+PL.update=function(dt){var D=dt||0;if(D>1)D=1;if(D<0)D=0;
 if(!SB.player||!SB.player.hero){PL._syncResponse();return;}
+var rem=D;
+while(rem>1e-9){var h=rem>1/60?1/60:rem;rem-=h;
 var hp=_heroPos(),hh=_heroHeading(),hx=hp[0],hz=hp[1];
 var d=PL._desired(),preset=SB.state.preset||'free';
 var heroSp=(SB.state.speedKmh||0)/3.6;
@@ -157,10 +161,10 @@ if(dist>160){var bo=_rot(ci%2?-6:6,14+ci*6,hh);
 u.pos.x=hx+bo.x;u.pos.z=hz+bo.z;dx=hx-u.pos.x;dz=hz-u.pos.z;dist=Math.sqrt(dx*dx+dz*dz);}
 var wantH=Math.atan2(-dx,-dz),dh=wantH-u.heading;
 while(dh>Math.PI)dh-=Math.PI*2;while(dh<-Math.PI)dh+=Math.PI*2;
-u.heading+=_clamp(dh,-2.2*dt,2.2*dt);
+u.heading+=_clamp(dh,-2.2*h,2.2*h);
 var target=dist<7?26:20+PL.stars()*1.5;
-u.speed+=_clamp(target-u.speed,-12*dt,12*dt);
-u.pos.x+=-Math.sin(u.heading)*u.speed*dt;u.pos.z+=-Math.cos(u.heading)*u.speed*dt;
+u.speed+=_clamp(target-u.speed,-12*h,12*h);
+u.pos.x+=-Math.sin(u.heading)*u.speed*h;u.pos.z+=-Math.cos(u.heading)*u.speed*h;
 u.group.rotation.y=u.heading;
 u.status=dist<12?'RAMMING':'PURSUIT';u._placed=true;
 if(dist<3.4&&SB.state.simTime-u._ramAt>1){u._ramAt=SB.state.simTime;
@@ -169,7 +173,7 @@ if(onFoot){if(SB.player.damage)SB.player.damage(8);}
 else if(SB.vehicles&&SB.vehicles.active){var av=SB.vehicles.active;
 av.cond=Math.max(0,av.cond-4);
 if(SB.player.damage&&Math.abs(u.speed-heroSp)>10)SB.player.damage(2);}}}
-if(d.heli){PL.spawnHeli();PL.updateHeli(dt);}
+if(d.heli){PL.spawnHeli();PL.updateHeli(h);}
 else if(PL.heli){if(SB.engine&&SB.engine.scene){SB.engine.scene.remove(PL.heli.group);
 if(PL.heli.disc)SB.engine.scene.remove(PL.heli.disc);}PL.heli=null;}
 PL._syncRoadblock(d.roadblock,hx,hz,hh);
@@ -179,18 +183,18 @@ PL.spawnCop({x:hx+Math.cos(a)*14,z:hz+Math.sin(a)*14,hp:100,name:'FOOT-'+(fi+1)}
 for(var cj=0;cj<PL.cops.length;cj++){var cp=PL.cops[cj];
 if(!cp.userData||cp.userData.hp<=0)continue;
 var cdx=hx-cp.pos.x,cdz=hz-cp.pos.z,cd=Math.sqrt(cdx*cdx+cdz*cdz);
-if(cd>2.5){cp.pos.x+=cdx/cd*5.5*dt;cp.pos.z+=cdz/cd*5.5*dt;
+if(cd>2.5){cp.pos.x+=cdx/cd*5.5*h;cp.pos.z+=cdz/cd*5.5*h;
 cp.group.rotation.y=Math.atan2(-cdx,-cdz);}
 if(cd<1.8){cp._hitAt=cp._hitAt||-9;
 if(SB.state.simTime-cp._hitAt>1){cp._hitAt=SB.state.simTime;
 if(SB.player.damage)SB.player.damage(5);}}
-if(!cp.userData.boss&&SB.player.onFoot()&&cd<2.2){PL._bustT+=dt;
-if(PL._bustT>2.5){PL._bustT=0;PL.busted();}}else PL._bustT=Math.max(0,PL._bustT-dt);}
+if(!cp.userData.boss&&SB.player.onFoot()&&cd<2.2){PL._bustT+=h;
+if(PL._bustT>2.5){PL._bustT=0;PL.busted();}}else PL._bustT=Math.max(0,PL._bustT-h);}
 var near=PL.heli?true:false;
 for(var ni=0;ni<PL._cruisers.length;ni++){var nu=PL._cruisers[ni];
 var ndx=nu.pos.x-hx,ndz=nu.pos.z-hz;
 if(ndx*ndx+ndz*ndz<625){near=true;break;}}
-SB.state.inSight=near;
+SB.state.inSight=near;}
 PL._syncResponse();PL._updated=true;};
 PL._reset=function(){var hosp=(SB.city&&SB.city.spawnPoints&&SB.city.spawnPoints.hospital)||[-150,250];
 if(SB.player&&SB.player.respawn)SB.player.respawn(hosp[0],hosp[1]);
@@ -206,8 +210,7 @@ for(var i=0;i<PL.cops.length;i++)if(SB.engine&&SB.engine.scene)SB.engine.scene.r
 PL.cops=[];PL._bustT=0;};
 PL.busted=function(){PL._reset();};
 PL.wasted=function(){PL._reset();};
-// Wrap engine.step ONCE (guard SB._b2polStep) so police ticks inside the single
-// engine step. main.js must never call PL.update separately (double-step).
+// Wrap engine.step ONCE (SB._b2polStep guard).
 PL._installWrap=function(){if(!SB.engine||typeof SB.engine.step!=='function'||SB._b2polStep)return;
 SB._b2polStep=true;var orig=SB.engine.step;
 SB.engine.step=function(dt){PL.update(dt);return orig.call(SB.engine,dt);};};
