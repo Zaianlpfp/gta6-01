@@ -1,311 +1,185 @@
-(function () {
-  'use strict';
-
-  var SB = window.SB = window.SB || {};
-  var P = SB.player = SB.player || {};
-  var WALK_SPEED = 4, RUN_SPEED = 7;
-  var _prev = {};
-  var _registered = false;
-  var _sceneHooked = false;
-  var _lastShot = -10;
-  var _flash = null, _flashT = 0;
-
-  function edge(code) {
-    var down = SB.input.isDown(code);
-    var was = !!_prev[code];
-    _prev[code] = down;
-    return down && !was;
-  }
-  window.addEventListener('blur', function () { _prev = {}; });
-
-  function angLerp(a, b, t) {
-    var d = b - a;
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    return a + d * Math.min(1, t);
-  }
-
-  var C = SB.combat = SB.combat || {};
-  C.ORDER = ['fists', 'pistol', 'smg', 'shotgun', 'rifle'];
-  C.MAG = { pistol: 12, smg: 32, shotgun: 6, rifle: 30 };
-  C.RATE = { fists: 0.4, pistol: 0.25, smg: 0.09, shotgun: 0.8, rifle: 0.12 };
-  Object.defineProperty(C, 'weapons', { get: function () { return SB.state.weapons; } });
-
-  function aimDir() {
-    var p = SB.world.player;
-    var from = { x: p.pos.x, y: p.pos.y + 1.3, z: p.pos.z };
-    var cam = SB.world.camera;
-    if (!cam) return { x: -Math.sin(p.heading), y: 0, z: -Math.cos(p.heading) };
-    var mx = SB.input.mouse.x, my = SB.input.mouse.y;
-    var nx = 0, ny = 0;
-    if (mx !== 0 || my !== 0) {
-      nx = (mx / window.innerWidth) * 2 - 1;
-      ny = -((my / window.innerHeight) * 2 - 1);
-    }
-    var rc = new THREE.Raycaster();
-    rc.setFromCamera({ x: nx, y: ny }, cam);
-    var plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -1);
-    var pt = new THREE.Vector3();
-    if (rc.ray.intersectPlane(plane, pt)) {
-      var dx = pt.x - from.x, dy = 1 - from.y, dz = pt.z - from.z;
-      var l = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-      return { x: dx / l, y: dy / l, z: dz / l };
-    }
-    var d = new THREE.Vector3();
-    cam.getWorldDirection(d);
-    return { x: d.x, y: 0, z: d.z };
-  }
-
-  function showFlash(from, dir) {
-    if (!_flash) {
-      _flash = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 0.7),
-        new THREE.MeshBasicMaterial({ color: 0xffe08a }));
-      SB.world.scene.add(_flash);
-    }
-    _flash.position.set(from.x + dir.x * 0.9, from.y + dir.y * 0.9, from.z + dir.z * 0.9);
-    _flash.visible = true;
-    _flashT = 0.06;
-  }
-
-  C.selectWeapon = function (id) {
-    if (C.ORDER.indexOf(id) < 0) return false;
-    if (id === 'rifle' && SB.state.weapons.rifle.locked) {
-      SB.emit('weapon-locked', { weapon: 'rifle' });
-      return false;
-    }
-    SB.state.weapon = id;
-    SB.emit('weapon-change', { weapon: id });
-    return true;
-  };
-
-  C.shoot = function () {
-    var p = SB.world.player;
-    if (!p || !SB.state.started) return false;
-    var id = SB.state.weapon;
-    if (SB.state.simTime - _lastShot < C.RATE[id]) return false;
-    var w = SB.state.weapons[id];
-    if (!w) return false;
-    if (id !== 'fists') {
-      if (w.ammo <= 0) {
-        if (w.reserve > 0) C.reload();
-        else SB.emit('dry-fire', { weapon: id });
-        return false;
-      }
-      w.ammo -= 1;
-    }
-    _lastShot = SB.state.simTime;
-    var from = { x: p.pos.x, y: p.pos.y + 1.3, z: p.pos.z };
-    var dir = aimDir();
-    if (id !== 'fists') showFlash(from, dir);
-    SB.emit('shot', { weapon: id, from: from, dir: dir, ammo: w.ammo, reserve: w.reserve });
-    return true;
-  };
-
-  C.reload = function () {
-    var id = SB.state.weapon;
-    var w = SB.state.weapons[id];
-    if (!w || w.ammo === Infinity) return false;
-    var mag = C.MAG[id] || 0;
-    var need = mag - w.ammo;
-    if (need <= 0 || w.reserve <= 0) return false;
-    var take = Math.min(need, w.reserve);
-    w.ammo += take;
-    w.reserve -= take;
-    SB.emit('reload', { weapon: id, ammo: w.ammo, reserve: w.reserve });
-    return true;
-  };
-
-  function adoptStaged(p) {
-    var v = p.vehicle;
-    var spec = (SB.vehicles && SB.vehicles.SPECS && SB.vehicles.SPECS[v.kind]) ||
-      { topSpeed: 55, accel: 14 };
-    var rec = {
-      id: v.id || 'stage-vento', name: v.name || 'VENTO STRADA', kind: v.kind || 'sport',
-      condition: (v.condition !== undefined ? v.condition : 100),
-      group: p.mesh, pos: p.mesh.position, heading: p.heading, speed: 0,
-      topSpeed: spec.topSpeed, accel: spec.accel, taken: true, stalled: false
-    };
-    SB.world.vehicles.push(rec);
-    p.vehicle = rec;
-    p.onFoot = false;
-    SB.state.vehicle = { id: rec.id, name: rec.name, kind: rec.kind, condition: rec.condition };
-    SB.state.speedKmh = 0;
-    SB.state.gear = 'N';
-  }
-
-  function hookScenePreset() {
-    if (_sceneHooked) return;
-    _sceneHooked = true;
-    SB.on('scene', function (e) {
-      if (!e || (e.name !== 'cover' && e.name !== 'mission' && e.name !== 'night')) return;
-      var p = SB.world.player;
-      if (!p || !p.onFoot) return;
-      if (!SB.vehicles || !SB.vehicles.nearest) return;
-      var v = SB.vehicles.nearest(p.pos.x, p.pos.z, 30);
-      if (v) P.enterVehicle(v, { steal: false });
-    });
-  }
-
-  P.create = function (spawn) {
-    spawn = spawn || (SB.world.spawns && SB.world.spawns.player) || { x: 0, z: 60, heading: 0 };
-    var existing = SB.world.player;
-    if (existing) {
-      if (!existing.onFoot && existing.vehicle) adoptStaged(existing);
-      else { existing.onFoot = true; existing.vehicle = null; }
-    } else {
-      var mesh = SB.city.makePedMesh(0xff5a8a, 0xc98a5a);
-      mesh.position.set(spawn.x, 0, spawn.z);
-      mesh.rotation.y = spawn.heading || 0;
-      SB.world.scene.add(mesh);
-      SB.world.player = {
-        mesh: mesh, pos: mesh.position, heading: spawn.heading || 0,
-        speed: 0, onFoot: true, vehicle: null
-      };
-    }
-    SB.setChaseTarget(SB.world.player);
-    SB.setCameraMode(SB.world.player.onFoot ? 'onfoot' : 'chase');
-    if (!_registered) { _registered = true; SB.registerUpdate(P.update); }
-    hookScenePreset();
-    return SB.world.player;
-  };
-
-  P.isOnFoot = function () {
-    return !!SB.world.player && !!SB.world.player.onFoot;
-  };
-
-  P.setPosition = function (x, z, heading) {
-    var p = SB.world.player;
-    if (!p) return false;
-    if (p.vehicle) {
-      var v = p.vehicle;
-
-      if (v.pos) v.pos.set(x, 0, z);
-      if (v.group) v.group.rotation.y = heading;
-      if (v.heading !== undefined) v.heading = heading;
-    }
-    p.pos.set(x, 0, z);
-    p.heading = heading;
-    if (p.mesh) p.mesh.rotation.y = heading;
-    return true;
-  };
-
-  P.enterVehicle = function (v, opts) {
-    var p = SB.world.player;
-    if (!p || !v || !p.onFoot) return false;
-    opts = opts || {};
-    p.vehicle = v;
-    p.onFoot = false;
-    p.pos.set(v.pos.x, 0, v.pos.z);
-    p.heading = v.heading;
-    if (p.mesh) p.mesh.visible = false;
-    SB.state.vehicle = { id: v.id, name: v.name, kind: v.kind, condition: Math.round(v.condition) };
-    SB.setCameraMode('chase');
-    SB.setChaseTarget(p);
-    SB.emit('enter-vehicle', { vehicle: SB.state.vehicle });
-    return true;
-  };
-
-  P.exitVehicle = function () {
-    var p = SB.world.player;
-    if (!p || p.onFoot || !p.vehicle) return false;
-    var v = p.vehicle;
-    var rx = Math.cos(v.heading), rz = -Math.sin(v.heading);
-    var px = v.pos.x + rx * 2.6, pz = v.pos.z + rz * 2.6;
-    if (SB.isBlocked(px, pz, 0.5)) { px = v.pos.x - rx * 2.6; pz = v.pos.z - rz * 2.6; }
-    if (SB.isBlocked(px, pz, 0.5)) {
-      var f = SB.forwardOf(v.heading);
-      px = v.pos.x - f.x * 3.5; pz = v.pos.z - f.z * 3.5;
-    }
-    var c = SB.clampToBounds(px, pz);
-    p.pos.set(c.x, 0, c.z);
-    p.heading = v.heading;
-    p.vehicle = null;
-    p.onFoot = true;
-    if (p.mesh) { p.mesh.visible = true; p.mesh.rotation.y = p.heading; }
-    SB.state.vehicle = null;
-    SB.state.speedKmh = 0;
-    SB.state.gear = 'N';
-    SB.setCameraMode('onfoot');
-    SB.setChaseTarget(p);
-    SB.emit('exit-vehicle', { vehicle: { id: v.id, name: v.name, kind: v.kind } });
-    return true;
-  };
-
-  function nearestVehicle(x, z, maxD) {
-    if (SB.vehicles && SB.vehicles.nearest) return SB.vehicles.nearest(x, z, maxD);
-    var best = null, bestD = maxD * maxD;
-    var list = SB.world.vehicles;
-    for (var i = 0; i < list.length; i++) {
-      var dx = list[i].pos.x - x, dz = list[i].pos.z - z;
-      var d2 = dx * dx + dz * dz;
-      if (d2 < bestD) { bestD = d2; best = list[i]; }
-    }
-    return best;
-  }
-
-  function updateOnFoot(dt) {
-    var p = SB.world.player;
-    var ax = SB.input.axis();
-    var cam = SB.world.camera;
-    var cx = p.pos.x - cam.position.x, cz = p.pos.z - cam.position.z;
-    var cl = Math.sqrt(cx * cx + cz * cz) || 1;
-    cx /= cl; cz /= cl;
-    var mx = cx * ax.y + (-cz) * ax.x;
-    var mz = cz * ax.y + (cx) * ax.x;
-    var ml = Math.sqrt(mx * mx + mz * mz);
-    var moving = ml > 0.01;
-    var speed = (SB.input.isDown('ShiftLeft') || SB.input.isDown('ShiftRight')) ? RUN_SPEED : WALK_SPEED;
-    if (moving) {
-      mx /= ml; mz /= ml;
-      var nx = p.pos.x + mx * speed * dt;
-      var nz = p.pos.z + mz * speed * dt;
-      if (!SB.isBlocked(nx, p.pos.z, 0.5)) p.pos.x = nx;
-      if (!SB.isBlocked(p.pos.x, nz, 0.5)) p.pos.z = nz;
-      p.heading = angLerp(p.heading, SB.headingForDir(mx, mz), dt * 10);
-      p.speed = speed;
-    } else {
-      p.speed = 0;
-    }
-    if (p.mesh) {
-      p.mesh.rotation.y = p.heading;
-      p.mesh.position.y = moving ? Math.abs(Math.sin(SB.state.simTime * 10)) * 0.06 : 0;
-    }
-  }
-
-  P.update = function (dt) {
-    var p = SB.world.player;
-    if (!p) return;
-    if (_flashT > 0) {
-      _flashT -= dt;
-      if (_flashT <= 0 && _flash) _flash.visible = false;
-    }
-
-    if (edge('KeyE')) {
-      if (p.onFoot) {
-        var v = nearestVehicle(p.pos.x, p.pos.z, 4);
-        if (v) {
-          if (!v.taken && SB.vehicles && SB.vehicles.steal) SB.vehicles.steal(v);
-          P.enterVehicle(v);
-        }
-      } else {
-        P.exitVehicle();
-      }
-    }
-
-    var keys = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'];
-    for (var i = 0; i < keys.length; i++) {
-      if (edge(keys[i])) C.selectWeapon(C.ORDER[i]);
-    }
-    if (edge('KeyR')) C.reload();
-    if (SB.input.isDown('KeyF') || SB.input.mouse.down) C.shoot();
-
-    if (p.onFoot) updateOnFoot(dt);
-    else if (SB.vehicles && SB.vehicles.update) SB.vehicles.update(dt);
-
-    var d = SB.districtAt(p.pos.x, p.pos.z);
-    if (d) SB.state.location = d.name;
-    var s = SB.streetAt(p.pos.x, p.pos.z);
-    if (s) SB.state.street = s;
-  };
-
-})();
+// player.js — Solmar Bay r7 (B2): hero jalan kaki, combat, senjata. Ditulis segar.
+var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
+var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
+// Senjata: 1=fists 2=pistol 3=smg 4=shotgun 5=rifle(locked). Pistol 34dmg:
+// boss hp 220 -> 7 tembakan (34*6=204<220). Shotgun 120dmg -> 2 tembakan.
+var WEAPONS={1:{n:'fists',dmg:12,rate:.35,range:2.5,max:Infinity},
+2:{n:'pistol',dmg:34,rate:.22,range:40,max:12,res:48},
+3:{n:'smg',dmg:22,rate:.09,range:30,max:32,res:128},
+4:{n:'shotgun',dmg:120,rate:.8,range:24,max:6,res:18},
+5:{n:'rifle',dmg:60,rate:.15,range:48,max:30,res:90,locked:true}};
+function _clamp(v,a,b){return v<a?a:v>b?b:v;}
+function _angDiff(a,b){var d=b-a;while(d>Math.PI)d-=Math.PI*2;while(d<-Math.PI)d+=Math.PI*2;return d;}
+function _axis(){var i=SB.input||{};if(typeof i.axis==='function')return i.axis();
+var k=i.keys||{},x=0,y=0;if(k.KeyD||k.ArrowRight)x+=1;if(k.KeyA||k.ArrowLeft)x-=1;
+if(k.KeyW||k.ArrowUp)y+=1;if(k.KeyS||k.ArrowDown)y-=1;return{x:x,y:y};}
+function _down(c){var i=SB.input||{};if(typeof i.isDown==='function')return i.isDown(c);
+return!!(i.keys&&i.keys[c]);}
+function _fwd(h){return{x:-Math.sin(h),z:-Math.cos(h)};}
+function _rot(lx,lz,h){return{x:lx*Math.cos(h)+lz*Math.sin(h),z:-lx*Math.sin(h)+lz*Math.cos(h)};}
+// Tabrakan: pakai SB.isBlocked bila ada, else collider city (AABB / center-box).
+SB._blocked=SB._blocked||function(x,z){
+if(typeof SB.isBlocked==='function'){try{return SB.isBlocked(x,z,1.2);}catch(e){}}
+var c=SB.city&&(SB.city.colliders||SB.city.buildings);
+if(c)for(var i=0;i<c.length;i++){var b=c[i],x0,x1,z0,z1;
+if(b.x0!==undefined){x0=b.x0;x1=b.x1;z0=b.z0;z1=b.z1;}
+else{var cx=b.cx!==undefined?b.cx:b.x,cz=b.cz!==undefined?b.cz:b.z,w=b.w||10,d=b.d||10;
+x0=cx-w/2;x1=cx+w/2;z0=cz-d/2;z1=cz+d/2;}
+if(x>x0-0.6&&x<x1+0.6&&z>z0-0.6&&z<z1+0.6)return true;}
+return false;};
+SB._clampPos=SB._clampPos||function(x,z){var b=(SB.city&&SB.city.bounds)||{minX:-560,maxX:470,minZ:-470,maxZ:530};
+return{x:_clamp(x,b.minX,b.maxX),z:_clamp(z,b.minZ,b.maxZ)};};
+function _box(w,h,d,c,x,y,z){var m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),
+new THREE.MeshStandardMaterial({color:c,roughness:.85}));m.position.set(x,y,z);return m;}
+function mkPed(shirt,skin){var g=new THREE.Group();
+var legL=_box(.22,.8,.24,0x222831,-.14,.4,0),legR=_box(.22,.8,.24,0x222831,.14,.4,0);
+var torso=_box(.62,.6,.34,shirt,0,1.1,0);
+var armL=_box(.16,.62,.2,shirt,-.4,1.1,0),armR=_box(.16,.62,.2,shirt,.4,1.1,0);
+var head=_box(.42,.42,.4,skin,0,1.62,0);
+var cap=_box(.46,.12,.44,0x111827,0,1.86,0);
+g.add(legL);g.add(legR);g.add(torso);g.add(armL);g.add(armR);g.add(head);g.add(cap);
+g.userData.limbs={legL:legL,legR:legR,armL:armL,armR:armR};return g;}
+SB.player=SB.player||{};
+var P=SB.player;
+P.cash=500;P.health=100;P.armor=0;P.weapon=1;
+P.ammo={1:{mag:Infinity,res:Infinity},2:{mag:12,res:48},3:{mag:32,res:128},4:{mag:6,res:18},5:{mag:0,res:0,locked:true}};
+P.hero=null;P._px=0;P._pz=60;P._heading=0;P._cool=0;P._prev={};P._wasted=false;
+P.makePedMesh=mkPed;
+P._sync=function(){SB.state.health=P.health;SB.state.armor=P.armor;
+var w={};for(var k in WEAPONS){var a=P.ammo[k];w[WEAPONS[k].n]={ammo:a.mag,reserve:a.res};}
+SB.state.weapons=w;};
+P.pos=function(){var v=SB.vehicles&&SB.vehicles.active;
+if(v&&v.pos)return[v.pos.x,v.pos.z];return[P._px,P._pz];};
+P.heading=function(){var v=SB.vehicles&&SB.vehicles.active;
+if(v)return v.heading;return P._heading;};
+P.onFoot=function(){return!(SB.vehicles&&SB.vehicles.active);};
+P.setPosition=function(x,z,h){var c=SB._clampPos(x,z);x=c.x;z=c.z;
+if(h===undefined)h=P._heading;
+var v=SB.vehicles&&SB.vehicles.active;
+if(v){v.pos.x=x;v.pos.z=z;v.heading=h;v.mesh.position.set(x,0,z);v.mesh.rotation.y=h;}
+P._px=x;P._pz=z;P._heading=h;
+if(P.hero){P.hero.position.set(x,0,z);P.hero.rotation.y=h;}};
+P.create=function(spawn){var preset=SB.state.preset||'free';
+var sp=(SB.city&&SB.city.spawnPoints&&SB.city.spawnPoints[preset])||null;
+var x=0,z=60;if(sp){x=sp[0];z=sp[1];}else if(spawn){x=spawn.x||0;z=spawn.z||60;}
+if(!P.hero){P.hero=mkPed(0xff6b5e,0xc68642);if(SB.engine&&SB.engine.scene)SB.engine.scene.add(P.hero);}
+P._px=x;P._pz=z;P._heading=0;P._wasted=false;P.health=100;P.armor=0;
+P.hero.position.set(x,0,z);P.hero.rotation.y=0;P.hero.visible=true;
+if(SB.vehicles&&SB.vehicles.spawnParked)SB.vehicles.spawnParked();
+if((preset==='cover'||preset==='mission')&&SB.vehicles&&SB.vehicles.pinkCar){
+var pc=SB.vehicles.pinkCar;pc.pos.x=x;pc.pos.z=z;pc.heading=0;
+pc.mesh.position.set(x,0,z);pc.mesh.rotation.y=0;P.enterVehicle(pc);}
+P._sync();P._installWrap();return P.hero;};
+P.enterVehicle=function(v){if(!v||!P.hero)return false;
+if(v.parked&&SB.vehicles&&!SB.vehicles._owned[v.id]){
+SB.vehicles._owned[v.id]=1;
+if(SB.police&&SB.police.setStars)SB.police.setStars(Math.min(5,SB.police.stars()+1));
+else SB.state.heat=Math.min(5,(SB.state.heat|0)+1);}
+SB.vehicles.active=v;P.hero.visible=false;return true;};
+P.exitVehicle=function(){var v=SB.vehicles&&SB.vehicles.active;if(!v||!P.hero)return false;
+var r={x:Math.cos(v.heading),z:-Math.sin(v.heading)};
+var nx=v.pos.x+r.x*2.4,nz=v.pos.z+r.z*2.4;
+if(SB._blocked(nx,nz)){nx=v.pos.x-r.x*2.4;nz=v.pos.z-r.z*2.4;}
+if(SB._blocked(nx,nz)){nx=v.pos.x;nz=v.pos.z;}
+var c=SB._clampPos(nx,nz);P._px=c.x;P._pz=c.z;P._heading=v.heading;
+P.hero.position.set(c.x,0,c.z);P.hero.rotation.y=v.heading;P.hero.visible=true;
+SB.vehicles.active=null;SB.state.speedKmh=0;SB.state.vehicleName='—';
+SB.state.vehicleCond=100;SB.state.vehicleStatus='OK';return true;};
+P.damage=function(n){if(n<=0||P._wasted)return;
+var a=Math.min(P.armor,n);P.armor-=a;n-=a;P.health-=n;P._sync();
+if(P.health<=0){P.health=0;P._sync();P._wasted=true;
+if(SB.police&&SB.police.wasted)SB.police.wasted();}};
+P.respawn=function(x,z){P._wasted=false;P.health=100;P.armor=0;
+if(SB.vehicles)SB.vehicles.active=null;
+P.setPosition(x,z,0);if(P.hero)P.hero.visible=true;P._sync();};
+P.selectWeapon=function(n){n=+n;if(!WEAPONS[n]||WEAPONS[n].locked)return false;
+P.weapon=n;P._sync();return true;};
+P.weaponName=function(){return WEAPONS[P.weapon].n;};
+P.reload=function(){var w=WEAPONS[P.weapon];if(!w||w.max===Infinity)return false;
+var a=P.ammo[P.weapon],need=w.max-a.mag,take=Math.min(need,a.res);
+if(take<=0)return false;a.mag+=take;a.res-=take;P._sync();return true;};
+function _targets(){var out=[];
+function has(o){for(var i=0;i<out.length;i++)if(out[i].obj===o)return true;return false;}
+function add(o,needFlag){if(!o||has(o))return;var g=o.group||o.mesh||o;
+var u=g.userData||o.userData||{};
+var hp=typeof u.hp==='number'?u.hp:(typeof o.hp==='number'?o.hp:NaN);
+if(!(hp>0))return;
+if(needFlag&&!(u.boss||u.enforcer||u.hostile||u.cop))return;
+out.push({obj:o,grp:g,ud:u,hp:hp});}
+function arr(a,needFlag){if(a)for(var i=0;i<a.length;i++)add(a[i],needFlag);}
+arr(SB.police&&SB.police.cops,false);
+arr(SB.missions&&SB.missions.standoffPeds,false);
+arr(SB.missions&&SB.missions.standoff,false);
+arr(SB.world&&SB.world.hostiles,false);
+arr(SB.world&&SB.world.peds,true);
+if(SB.engine&&SB.engine.scene&&SB.engine.scene.traverse)
+SB.engine.scene.traverse(function(o){if(o&&o.userData&&typeof o.userData.hp==='number')add(o,true);});
+return out;}
+P.fire=function(target){var w=WEAPONS[P.weapon];if(!w)return{hit:false};
+var v=SB.vehicles&&SB.vehicles.active;
+var ox,oz,h;if(v&&v.pos){ox=v.pos.x;oz=v.pos.z;h=v.heading;}
+else{ox=P._px;oz=P._pz;h=P._heading;}
+var f=_fwd(h),mx=ox+f.x*(v?2.2:.9),my=v?1.2:1.35,mz=oz+f.z*(v?2.2:.9);
+if(SB.engine&&SB.engine.muzzlePos&&SB.engine.muzzlePos.set)SB.engine.muzzlePos.set(mx,my,mz);
+if(SB.engine&&typeof SB.engine.burst==='function')SB.engine.burst(mx,my,mz,3);
+if(w.max!==Infinity){var a=P.ammo[P.weapon];
+if(a.mag<=0){P.reload();if(a.mag<=0)return{hit:false,dry:true};}a.mag--;P._sync();}
+var t=null;
+if(target){var g=target.group||target.mesh||target;var u=g.userData||target.userData||{};
+var hp=typeof u.hp==='number'?u.hp:target.hp;
+if(typeof hp==='number'&&hp>0)t={obj:target,grp:g,ud:u,hp:hp};}
+if(!t){var list=_targets(),best=null,bestD=1e9,bestIn=null,bestInD=1e9;
+for(var i=0;i<list.length;i++){var c=list[i],p=c.grp.position||c.obj.pos||{x:0,z:0};
+var dx=(p.x!==undefined?p.x:0)-ox,dz=(p.z!==undefined?p.z:0)-oz;
+var d=Math.sqrt(dx*dx+dz*dz);if(d>w.range)continue;
+var dot=d>0?(dx*f.x+dz*f.z)/d:1;
+if(dot>0.4&&d<bestInD){bestIn=c;bestInD=d;}
+if(d<bestD){best=c;bestD=d;}}
+t=bestIn||best;}
+if(!t)return{hit:false};
+var dmg=w.dmg,hp2;
+if(typeof t.ud.hp==='number'){t.ud.hp-=dmg;hp2=t.ud.hp;}
+else{t.obj.hp-=dmg;hp2=t.obj.hp;}
+if(typeof t.obj.hp==='number'&&t.obj!==t.grp)t.obj.hp=hp2;
+var killed=hp2<=0;
+if(killed){t.grp.visible=false;
+if(t.ud.boss&&SB.missions&&typeof SB.missions.standoffDown==='function')
+SB.missions.standoffDown();}
+return{hit:true,killed:killed,dmg:dmg,boss:!!t.ud.boss,enforcer:!!t.ud.enforcer};}
+P._pressed=function(c){var d=_down(c),was=P._prev[c];P._prev[c]=d;return d&&!was;};
+P._tick=function(dt){if(!P.hero)return;dt=_clamp(dt||0,0,.05);P._cool-=dt;
+if(_down('Digit1'))P.selectWeapon(1);if(_down('Digit2'))P.selectWeapon(2);
+if(_down('Digit3'))P.selectWeapon(3);if(_down('Digit4'))P.selectWeapon(4);
+if(P._pressed('KeyR'))P.reload();
+if(P._pressed('KeyE')){if(P.onFoot()){
+var nv=SB.vehicles?SB.vehicles.nearest(P._px,P._pz,4.5):null;
+if(nv)P.enterVehicle(nv);}else P.exitVehicle();}
+var ax=_axis();
+if(P.onFoot()){var run=_down('ShiftLeft')||_down('ShiftRight'),sp=run?7:4;
+var f=_fwd(P._heading),r={x:Math.cos(P._heading),z:-Math.sin(P._heading)};
+var dx=f.x*ax.y+r.x*ax.x,dz=f.z*ax.y+r.z*ax.x;
+var len=Math.sqrt(dx*dx+dz*dz),moving=len>0.05;
+if(moving){dx/=len;dz/=len;
+var nh=Math.atan2(-dx,-dz);
+P._heading+=_angDiff(P._heading,nh)*Math.min(1,dt*12);
+var nx=P._px+dx*sp*dt,nz=P._pz+dz*sp*dt;
+if(!SB._blocked(nx,P._pz))P._px=nx;if(!SB._blocked(P._px,nz))P._pz=nz;
+var c=SB._clampPos(P._px,P._pz);P._px=c.x;P._pz=c.z;
+var sw=Math.sin(SB.state.simTime*9)*0.55,l=P.hero.userData.limbs;
+if(l){l.legL.rotation.x=sw;l.legR.rotation.x=-sw;l.armL.rotation.x=-sw;l.armR.rotation.x=sw;}}
+else{var l2=P.hero.userData.limbs;
+if(l2){l2.legL.rotation.x=0;l2.legR.rotation.x=0;l2.armL.rotation.x=0;l2.armR.rotation.x=0;}}
+P.hero.position.set(P._px,0,P._pz);P.hero.rotation.y=P._heading;}
+else if(SB.vehicles&&SB.vehicles.update)SB.vehicles.update(dt);
+if(SB.input&&SB.input.mouse&&SB.input.mouse.down&&P._cool<=0){
+P.fire();P._cool=WEAPONS[P.weapon].rate;}
+if(SB.vehicles&&SB.vehicles._trafficTick)SB.vehicles._trafficTick(dt);
+if(SB.state.preset==='cover'&&!SB._b2traf&&SB.vehicles&&SB.vehicles.spawnTraffic){
+SB._b2traf=true;SB.vehicles.spawnTraffic(24);}
+if(P.health<=0&&!P._wasted){P._wasted=true;if(SB.police&&SB.police.wasted)SB.police.wasted();}};
+P.update=P._tick;
+P._installWrap=function(){if(!SB.engine||typeof SB.engine.step!=='function'||SB._b2step)return;
+SB._b2step=true;var orig=SB.engine.step;
+SB.engine.step=function(dt){P._tick(dt);return orig.call(SB.engine,dt);};};
+P._installWrap();
+P._sync();

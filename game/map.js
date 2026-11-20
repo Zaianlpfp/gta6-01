@@ -1,154 +1,201 @@
+// map.js — peta kota penuh Solmar Bay (M). B4 r7, tulis segar dari API.md r7.
+// Distrik {name,cx,cz,w,d}; jalan segmen {x0,z0,x1,z1}; judul di header DOM;
+// legenda 9 item; label distrik di-clamp (Bayline Docks utuh); jobs
+// DONE/ACTIVE/LOCKED; GPS jarak ke objektif.
 (function () {
   'use strict';
-  var SB = window.SB = window.SB || {};
-  var S = SB.state, W = SB.world;
-  var JOBS_FALLBACK = [
-    { id: 'first-fare', title: 'FIRST FARE', contact: 'MARA SOLIS', payout: 500, spot: 'hotel' },
-    { id: 'the-package', title: 'THE PACKAGE', contact: 'MARA SOLIS', payout: 1200, spot: 'marina' },
-    { id: 'hot-wheels', title: 'HOT WHEELS', contact: 'MARA SOLIS', payout: 1800, spot: 'garage' },
-    { id: 'night-run', title: 'NIGHT RUN', contact: 'MARA SOLIS', payout: 2500, spot: 'neon' },
-    { id: 'chop-shop', title: 'CHOP SHOP', contact: 'MARA SOLIS', payout: 3200, spot: 'garage' },
-    { id: 'harbor-lights', title: 'HARBOR LIGHTS', contact: 'MARA SOLIS', payout: 3200, spot: 'marina' },
-    { id: 'heat', title: 'HEAT', contact: 'MARA SOLIS', payout: 4200, spot: 'police' },
-    { id: 'big-score', title: 'THE BIG SCORE', contact: 'MARA SOLIS', payout: 5000, spot: 'bank' }
-  ];
+  var SB = window.SB;
+  var ov = null, cv = null, ctx = null, openFlag = false;
   var LEGEND = [
-    ['★', '#ffd23f', 'Story contact'], ['◆', '#ffe14d', 'Job objective'], ['⌂', '#39d353', 'Safehouse'],
-    ['✚', '#ff5a5a', 'Hospital'], ['⚑', '#4d9fff', 'Police'], ['$', '#b57edc', 'Weapons shop'],
-    ['✦', '#ff2a7a', 'Respray'], ['🏁', '#ffffff', 'Street race'], ['♦', '#ffd23f', 'Property'],
-    ['◉', '#ff9f1c', 'Sunset tape']
+    ['Story contact', '#ffd23f', '◆'], ['Job objective', '#ff5f5f', '◆'],
+    ['Safehouse', '#39d95e', '■'], ['Weapons', '#c07bff', '■'],
+    ['Respray', '#39d0ff', '●'], ['Street race', '#ff9f1c', '▲'],
+    ['Property', '#e8e8e8', '■'], ['Hospital', '#ffffff', '+'],
+    ['Police', '#4f8cff', '●']
   ];
-  var ICONS = { bank: '＄', hospital: '✚', police: '⚑', hotel: 'H', garage: '⚙', safehouse: '⌂', respray: '✦', shop: '$', club: '♪' };
-  var root = null, cv = null, ctx = null, visible = false;
-  var MX0 = -560, MZ0 = -470, MX1 = 470, MZ1 = 530;
-  function px(x) { return (x - MX0) / (MX1 - MX0) * cv.width; }
-  function py(z) { return (z - MZ0) / (MZ1 - MZ0) * cv.height; }
-  function jobs() {
-    if (SB.missions && SB.missions.JOBS && SB.missions.JOBS.length) return SB.missions.JOBS;
-    return JOBS_FALLBACK;
+  function build() {
+    if (ov) return;
+    ov = document.createElement('div');
+    ov.id = 'mapov'; ov.style.display = 'none';
+    var head = document.createElement('div');
+    head.id = 'map-head'; head.className = 'map-head';
+    var t = document.createElement('div');
+    t.id = 'map-title'; t.textContent = 'SOLMAR BAY';
+    var s = document.createElement('div');
+    s.id = 'map-sub'; s.textContent = 'M — close · GPS live';
+    head.appendChild(t); head.appendChild(s); ov.appendChild(head);
+    var body = document.createElement('div');
+    body.id = 'map-body'; body.className = 'map-body';
+    cv = document.createElement('canvas');
+    cv.id = 'map-canvas'; cv.width = 760; cv.height = 620;
+    body.appendChild(cv);
+    var side = document.createElement('div');
+    side.id = 'map-side'; side.className = 'map-side';
+    var jh = document.createElement('div');
+    jh.className = 'map-sidehead'; jh.textContent = 'JOBS — 8';
+    side.appendChild(jh);
+    var jl = document.createElement('div');
+    jl.id = 'map-jobs'; side.appendChild(jl);
+    var gps = document.createElement('div');
+    gps.id = 'map-gps'; side.appendChild(gps);
+    var lh = document.createElement('div');
+    lh.className = 'map-sidehead'; lh.textContent = 'LEGEND';
+    side.appendChild(lh);
+    var lg = document.createElement('div');
+    lg.id = 'map-legend'; side.appendChild(lg);
+    body.appendChild(side); ov.appendChild(body);
+    document.body.appendChild(ov);
+    ctx = cv.getContext('2d');
   }
-  var JOB_SPOT = { 'first-fare': 'hotel', 'the-package': 'marina', 'hot-wheels': 'garage', 'night-run': 'neon', 'chop-shop': 'garage', 'harbor-lights': 'marina', 'heat': 'police', 'big-score': 'bank' };
-  function missionTarget() {
-    if (SB.missions && SB.missions.active) {
-      var a = SB.missions.active();
-      var sm = SB.state.mission;
-      if (a && sm && sm.id === a.id && a.stages[sm.stage - 1] && a.stages[sm.stage - 1].target) return a.stages[sm.stage - 1].target;
-      if (a) { var j = jobs(); for (var i = 0; i < j.length; i++) { var sp = j[i].spot || JOB_SPOT[j[i].id]; if (j[i].id === a.id && sp && W.spawns.missions[sp]) return W.spawns.missions[sp]; } }
+  function jobs() {
+    if (SB.missions && SB.missions.list) return SB.missions.list;
+    if (SB.missions && SB.missions.JOBS) return SB.missions.JOBS;
+    return [];
+  }
+  function activeJob() {
+    if (SB.missions) {
+      var a = SB.missions.active;
+      if (typeof a === 'function') { try { return a() || null; } catch (e) { return null; } }
+      if (a && typeof a === 'object') return a;
     }
-    if (S.mission) { var js = jobs(); for (var k = 0; k < js.length; k++) { var sp2 = js[k].spot || JOB_SPOT[js[k].id]; if (js[k].id === S.mission.id && sp2 && W.spawns.missions[sp2]) return W.spawns.missions[sp2]; } }
+    return SB.state.mission || null;
+  }
+  function heroPos() {
+    if (SB.engine && typeof SB.engine.heroPos === 'function') {
+      try { var p = SB.engine.heroPos(); if (p) return { x: p[0], z: p[1] }; } catch (e) {}
+    }
+    if (SB.player && typeof SB.player.pos === 'function') {
+      try { var q = SB.player.pos(); if (q) return { x: q[0], z: q[1] }; } catch (e) {}
+    }
+    if (SB.world && SB.world.player && SB.world.player.pos) return { x: SB.world.player.pos.x, z: SB.world.player.pos.z };
     return null;
   }
-  function distTo(t) {
-    var p = W.player && W.player.pos;
-    if (!p || !t) return null;
-    return Math.round(Math.sqrt((t.x - p.x) * (t.x - p.x) + (t.z - p.z) * (t.z - p.z)));
-  }
-  function drawMap() {
+  function render() {
+    build();
     if (!ctx) return;
-    var w = cv.width, h = cv.height;
-    ctx.fillStyle = '#0d1a2e'; ctx.fillRect(0, 0, w, h);
-    var ds = W.districts || [];
-    for (var i = 0; i < ds.length; i++) {
-      var d = ds[i];
-      ctx.fillStyle = '#' + ('000000' + (d.tint || 0x223344).toString(16)).slice(-6);
-      ctx.globalAlpha = 0.55;
-      ctx.fillRect(px(d.x0), py(d.z0), px(d.x1) - px(d.x0), py(d.z1) - py(d.z0));
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 13px Arial'; ctx.textAlign = 'left';
-      ctx.fillText(d.name.toUpperCase(), px(d.x0) + 6, py(d.z0) + 18);
+    var W = 760, H = 620, pad = 14;
+    var b = { minX: -560, maxX: 470, minZ: -470, maxZ: 530 };
+    if (SB.world && SB.world.bounds) b = SB.world.bounds;
+    var sc = Math.min((W - pad * 2) / (b.maxX - b.minX), (H - pad * 2) / (b.maxZ - b.minZ));
+    var ox = pad + ((W - pad * 2) - (b.maxX - b.minX) * sc) / 2;
+    var oy = pad + ((H - pad * 2) - (b.maxZ - b.minZ) * sc) / 2;
+    function px(x) { return ox + (x - b.minX) * sc; }
+    function py(z) { return oy + (z - b.minZ) * sc; }
+    ctx.fillStyle = '#0a121c'; ctx.fillRect(0, 0, W, H);
+    var i, d;
+    var dists = (SB.city && SB.city.districts) || (SB.world && SB.world.districts) || [];
+    // Dua pass: dulu semua kotak distrik, BARU semua label (B5 r7) — kalau label
+    // digambar selang-seling dengan kotak, kotak distrik belakangan menutupi label
+    // distrik sebelumnya ('Coral Strand' jadi 'l Strand'). Label digeser +-9 px
+    // menurut sisi (cx<0 naik, cx>=0 turun) supaya label distrik sebaris yang
+    // berdekatan ('Neon Mile'/'Deco Row', 'Keystone Field'/'Bayline Docks')
+    // tidak bertumpuk; bayangan hitam supaya terbaca di atas grid.
+    for (i = 0; i < dists.length; i++) {
+      d = dists[i];
+      var x0 = (d.x0 != null ? d.x0 : d.cx - d.w / 2), z0 = (d.z0 != null ? d.z0 : d.cz - d.d / 2);
+      var w = (d.x1 != null ? d.x1 - d.x0 : d.w), h = (d.z1 != null ? d.z1 - d.z0 : d.d);
+      ctx.fillStyle = d.tint || '#16283a';
+      ctx.fillRect(px(x0), py(z0), w * sc, h * sc);
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.strokeRect(px(x0), py(z0), w * sc, h * sc);
     }
-    var rs = W.roads || [];
-    ctx.strokeStyle = '#5a6a80'; ctx.lineWidth = 5;
-    for (var r = 0; r < rs.length; r++) {
+    for (i = 0; i < dists.length; i++) {
+      d = dists[i];
+      var x0b = (d.x0 != null ? d.x0 : d.cx - d.w / 2), z0b = (d.z0 != null ? d.z0 : d.cz - d.d / 2);
+      var wb = (d.x1 != null ? d.x1 - d.x0 : d.w), hb = (d.z1 != null ? d.z1 - d.z0 : d.d);
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
+      ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 4;
+      var tw = ctx.measureText(d.name).width;
+      var lx = Math.max(tw / 2 + 4, Math.min(W - tw / 2 - 4, px(x0b + wb / 2)));
+      var ly = Math.max(16, Math.min(H - 6, py(z0b + hb / 2) + ((x0b + wb / 2) < 0 ? -9 : 9)));
+      ctx.fillText(d.name, lx, ly);
+      ctx.shadowBlur = 0;
+    }
+    var roads = (SB.city && SB.city.roads) || (SB.world && SB.world.roads) || [];
+    ctx.strokeStyle = '#46586a'; ctx.lineWidth = 3;
+    for (i = 0; i < roads.length; i++) {
+      var r = roads[i];
       ctx.beginPath();
-      if (rs[r].axis === 'z') { ctx.moveTo(px(rs[r].at), py(rs[r].from)); ctx.lineTo(px(rs[r].at), py(rs[r].to)); }
-      else { ctx.moveTo(px(rs[r].from), py(rs[r].at)); ctx.lineTo(px(rs[r].to), py(rs[r].at)); }
+      if (r.axis) {
+        if (r.axis === 'z') { ctx.moveTo(px(r.at), py(r.from)); ctx.lineTo(px(r.at), py(r.to)); }
+        else { ctx.moveTo(px(r.from), py(r.at)); ctx.lineTo(px(r.to), py(r.at)); }
+      } else { ctx.moveTo(px(r.x0), py(r.z0)); ctx.lineTo(px(r.x1), py(r.z1)); }
       ctx.stroke();
     }
-
-    ctx.fillStyle = '#1a5a8a'; ctx.fillRect(0, 0, px(-560) + 8, h);
-    var lms = W.landmarks || [];
-    ctx.textAlign = 'center';
-    for (var m = 0; m < lms.length; m++) {
-      var lm = lms[m], ic = ICONS[lm.kind] || '•';
-      ctx.fillStyle = lm.kind === 'safehouse' ? '#39d353' : lm.kind === 'shop' ? '#b57edc' : lm.kind === 'hospital' ? '#ff5a5a' : lm.kind === 'police' ? '#4d9fff' : '#ffd23f';
-      ctx.beginPath(); ctx.arc(px(lm.x), py(lm.z), 11, 0, 6.2832); ctx.fill();
-      ctx.fillStyle = '#0a0f18'; ctx.font = 'bold 12px Arial';
-      ctx.fillText(ic, px(lm.x), py(lm.z) + 4);
+    function dot(x, z, c, rad) { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(px(x), py(z), rad, 0, 6.2832); ctx.fill(); }
+    if (SB.city && SB.city.bank && SB.city.bank.pos) {
+      var bp = SB.city.bank.pos;
+      ctx.fillStyle = '#ffd23f'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('$', px(bp[0]), py(bp[2]) + 5);
     }
-    var t = missionTarget();
-    if (t) {
-      ctx.strokeStyle = '#ffe14d'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(px(t.x), py(t.z), 14, 0, 6.2832); ctx.stroke();
-      ctx.fillStyle = '#ffe14d'; ctx.font = 'bold 16px Arial';
-      ctx.fillText('◆', px(t.x), py(t.z) - 18);
+    var sp = (SB.city && SB.city.spawnPoints) || (SB.world && SB.world.spawns) || {};
+    if (sp.safehouse) dot(sp.safehouse.x != null ? sp.safehouse.x : sp.safehouse[0], sp.safehouse.z != null ? sp.safehouse.z : sp.safehouse[1], '#39d95e', 6);
+    var tgt = null, act = activeJob();
+    if (act && act.target) tgt = act.target;
+    if (tgt) {
+      var tx = tgt.x != null ? tgt.x : tgt[0], tz = tgt.z != null ? tgt.z : tgt[1];
+      ctx.save(); ctx.translate(px(tx), py(tz)); ctx.rotate(0.7854);
+      ctx.fillStyle = '#ff5f5f'; ctx.fillRect(-5, -5, 10, 10); ctx.restore();
     }
-    var p = W.player && W.player.pos;
-    if (p) {
-      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px(p.x), py(p.z), 7, 0, 6.2832); ctx.fill();
-      ctx.fillStyle = '#ff2a7a'; ctx.beginPath(); ctx.arc(px(p.x), py(p.z), 4, 0, 6.2832); ctx.fill();
+    var cops = (SB.police && SB.police.cops) || (SB.world && SB.world.police) || [];
+    for (i = 0; i < cops.length; i++) {
+      var p = cops[i];
+      if (p.pos) dot(p.pos.x, p.pos.z, '#4f8cff', 4);
+      else if (typeof p.x === 'number') dot(p.x, p.z, '#4f8cff', 4);
+    }
+    var hp = heroPos();
+    if (hp) {
+      var hd = (SB.world && SB.world.player && SB.world.player.heading) || (SB.vehicles && SB.vehicles.active && SB.vehicles.active.heading) || 0;
+      ctx.save(); ctx.translate(px(hp.x), py(hp.z)); ctx.rotate(-hd);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(6, 7); ctx.lineTo(-6, 7); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    var list = jobs(), doneCount = 0;
+    list.forEach(function (j) { if (j.done) doneCount++; });
+    var jl = document.getElementById('map-jobs');
+    if (jl) {
+      var html = '';
+      list.forEach(function (job, k) {
+        var stt = job.done ? 'DONE' : (act && act.id === job.id) ? 'ACTIVE' : k === doneCount ? 'ACTIVE' : k < doneCount ? 'DONE' : 'LOCKED';
+        html += '<div class="map-job ' + stt.toLowerCase() + '"><span class="map-jobnum">' + (k + 1) + '</span> ' +
+          '<span class="map-jobtitle">' + (job.name || job.title || job.id || '').toUpperCase() + '</span> ' +
+          '<span class="map-jobpay">$' + (job.payout || 0).toLocaleString('en-US') + '</span> ' +
+          '<span class="map-jobst">' + stt + '</span></div>';
+      });
+      jl.innerHTML = html;
+    }
+    var lg = document.getElementById('map-legend');
+    if (lg) {
+      var lh = '';
+      LEGEND.forEach(function (g) {
+        lh += '<div class="map-leg"><span style="color:' + g[1] + '">' + g[2] + '</span> ' + g[0] + '</div>';
+      });
+      lg.innerHTML = lh;
+    }
+    var gps = document.getElementById('map-gps');
+    if (gps) {
+      var gtxt = 'GPS: no active objective';
+      if (tgt && hp) {
+        var tx2 = tgt.x != null ? tgt.x : tgt[0], tz2 = tgt.z != null ? tgt.z : tgt[1];
+        var dx = tx2 - hp.x, dz = tz2 - hp.z;
+        gtxt = 'GPS: objective ' + Math.round(Math.sqrt(dx * dx + dz * dz)) + ' m away';
+      } else if (act && act.objective) gtxt = 'GPS: ' + act.objective;
+      gps.textContent = gtxt;
     }
   }
-  function build() {
-    root = document.createElement('div');
-    root.id = 'sb-map';
-    root.style.cssText = 'position:fixed;inset:0;background:#040810;z-index:55;display:none;color:#fff;font-family:Arial,sans-serif';
-    root.innerHTML = '<div style="display:flex;height:100%;padding:18px;gap:16px;box-sizing:border-box">' +
-      '<div style="flex:1;display:flex;flex-direction:column"><div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:22px;letter-spacing:3px">SOLMAR BAY</b><button id="sb-map-x" style="background:#ff2a7a;color:#fff;border:0;border-radius:5px;padding:6px 12px;cursor:pointer">CLOSE [M]</button></div>' +
-      '<div id="sb-map-gps" style="color:#ffd23f;font-size:14px;margin:6px 0"></div>' +
-      '<canvas id="sb-map-cv" width="640" height="620" style="align-self:center;height:100%;aspect-ratio:640/620;max-width:100%;border:2px solid #2a4a6a;border-radius:8px"></canvas></div>' +
-      '<div style="width:300px;overflow-y:auto"><div style="font-size:13px;letter-spacing:2px;color:#9fb4d8">STORY JOBS — <span id="sb-map-done"></span></div><div id="sb-map-jobs"></div>' +
-      '<div style="font-size:13px;letter-spacing:2px;color:#9fb4d8;margin-top:14px">LEGEND</div><div id="sb-map-legend" style="font-size:13px;line-height:1.9"></div>' +
-      '<div style="font-size:13px;letter-spacing:2px;color:#9fb4d8;margin-top:14px">DISTRICTS</div><div id="sb-map-districts" style="font-size:13px;line-height:1.7"></div>' +
-      '<div style="font-size:13px;letter-spacing:2px;color:#9fb4d8;margin-top:14px">COLLECTIBLES</div><div id="sb-map-coll" style="font-size:13px;line-height:1.7"></div></div></div>';
-    document.body.appendChild(root);
-    cv = root.querySelector('#sb-map-cv');
-    ctx = cv.getContext('2d');
-    root.querySelector('#sb-map-x').onclick = function () { SB.map.hide(); };
-    var lh = '';
-    for (var i = 0; i < LEGEND.length; i++) lh += '<span style="color:' + LEGEND[i][1] + '">' + LEGEND[i][0] + '</span> ' + LEGEND[i][2] + '<br>';
-    root.querySelector('#sb-map-legend').innerHTML = lh;
+  function show() {
+    build(); openFlag = true; ov.style.display = '';
+    SB.state.paused = true;
+    if (typeof SB.setPaused === 'function') { try { SB.setPaused(true); } catch (e) {} }
+    render();
   }
-  SB.map = {
-    JOBS: JOBS_FALLBACK,
-    show: function () {
-      if (!root) build();
-      visible = true; root.style.display = 'block';
-      SB.map.render();
-      if (SB.setPaused) SB.setPaused(true);
-    },
-    hide: function () {
-      visible = false;
-      if (root) root.style.display = 'none';
-      if (SB.setPaused && !(SB.dialog && SB.dialog.active())) SB.setPaused(false);
-    },
-    toggle: function () { if (SB.map.isOpen()) SB.map.hide(); else SB.map.show(); },
-    isOpen: function () { return visible; },
-    render: function () {
-      if (!root || !visible) return;
-      drawMap();
-      var js = jobs();
-      var h = '';
-      for (var i = 0; i < js.length; i++) {
-        var j = js[i];
-        var done = i < S.missionsDone;
-        var active = S.mission && S.mission.id === j.id;
-        h += '<div style="padding:8px 0;border-top:1px solid #223">' +
-          '<b style="color:' + (active ? '#ffd23f' : done ? '#39d353' : '#fff') + '">' + (i + 1) + '. ' + j.title + '</b>' +
-          '<span style="float:right;color:#39d353">$' + (j.payout || 0).toLocaleString('en-US') + '</span><br>' +
-          '<span style="color:#9fb4d8;font-size:12px">' + (j.contact || 'MARA SOLIS') + ' · ' + (done ? 'DONE ✓' : active ? 'IN PROGRESS' : 'LOCKED') + '</span></div>';
-      }
-      root.querySelector('#sb-map-jobs').innerHTML = h;
-      root.querySelector('#sb-map-done').textContent = S.missionsDone + '/' + S.missionsTotal + ' DONE';
-      var ds = W.districts || [], dh = '';
-      for (var d = 0; d < ds.length; d++) dh += '· ' + ds[d].name + '<br>';
-      root.querySelector('#sb-map-districts').innerHTML = dh;
-      root.querySelector('#sb-map-coll').innerHTML = '☀ Sun Coins ' + S.coins + '/' + S.coinsTotal + '<br>◉ Sunset Tapes ' + S.tapes + '/' + S.tapesTotal + '<br>♦ Properties 0/2';
-      var t = missionTarget(), g = distTo(t);
-      root.querySelector('#sb-map-gps').textContent = t ? ('GPS → ' + (S.mission ? S.mission.title : 'OBJECTIVE') + ': ' + g + ' m') : 'GPS — no active objective';
-    }
-  };
-  window.addEventListener('keydown', function (e) {
-    if (e.code === 'KeyM' && S.started) { e.preventDefault(); SB.map.toggle(); }
-  });
+  function hide() {
+    openFlag = false;
+    if (ov) ov.style.display = 'none';
+    SB.state.paused = false;
+    if (typeof SB.setPaused === 'function') { try { SB.setPaused(false); } catch (e) {} }
+  }
+  function toggle() { if (openFlag) hide(); else show(); }
+  SB.map = { show: show, hide: hide, toggle: toggle, render: render, open: show, close: hide, isOpen: function () { return openFlag; }, LEGEND: LEGEND };
 })();

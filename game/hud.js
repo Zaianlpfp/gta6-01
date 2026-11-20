@@ -1,285 +1,396 @@
+// hud.js — HUD Solmar Bay (DOM overlay). B4 r7, API.md r7.
 (function () {
   'use strict';
-  var SB = window.SB = window.SB || {};
-  var S = SB.state, W = SB.world;
-  var root = null, titleEl = null, els = {}, mm = null, mmCtx = null;
-  var acc = 0, mmAcc = 0, toastTimer = 0, briefTimer = 0;
-  var WPN = [['fists', 'FISTS'], ['pistol', 'PISTOL'], ['smg', 'SMG'], ['shotgun', 'SHOTGUN'], ['rifle', 'RIFLE']];
-  var UNITS = ['GULL-1', 'MARLIN-11', 'SNAPPER-25', 'TARPON-18', 'IBIS-43', 'HERON-17', 'KESTREL-31'];
-  var MISSION_SPOT = { 'first-fare': 'hotel', 'the-package': 'marina', 'hot-wheels': 'garage', 'night-run': 'neon', 'chop-shop': 'garage', 'harbor-lights': 'marina', 'heat': 'police', 'big-score': 'bank' };
-  var MARA_LINES = {
-    cover: 'Lose the cops, then bring the money home. No heroics, kid.',
-    night: 'Crew is waiting at Pelican Marina. Cops are thick tonight — move.'
-  };
+  var SB = window.SB;
+  var el = {}, staging = false, mmCanvas = null, mmCtx = null, last = {};
+  var DAYS = ['FRI', 'SAT', 'SUN', 'MON', 'TUE', 'WED', 'THU'];
+  var CREW = [['LUCIA ORTEGA', 'DRIVER', '#ff5fa2'], ['JAX', 'MECHANIC', '#ffb347'], ['MARA SOLIS', 'LOOKOUT', '#39d0ff']];
+  var WEAPONS = [['fists', '1', 'FISTS'], ['pistol', '2', 'PISTOL'], ['smg', '3', 'SMG'], ['shotgun', '4', 'SHOTGUN'], ['rifle', '5', 'RIFLE']];
   function $(id) { return document.getElementById(id); }
-  function el(tag, id, parent, html) {
-    var e = document.createElement(tag);
-    if (id) e.id = id;
-    if (html !== undefined && html !== null) e.innerHTML = html;
-    if (parent) parent.appendChild(e);
-    return e;
+  function mk(tag, id, cls, parent) {
+    var d = document.createElement(tag);
+    if (id) d.id = id;
+    if (cls) d.className = cls;
+    if (parent) parent.appendChild(d);
+    return d;
   }
-  function css() {
-    var st = document.createElement('style');
-    st.textContent = '#sb-hud{position:fixed;inset:0;pointer-events:none;z-index:40;color:#fff;font-family:Arial,Helvetica,sans-serif;text-shadow:0 1px 3px rgba(0,0,0,.85);font-size:14px}' +
-      '#sb-hud .panel{background:rgba(5,8,16,.62);border:1px solid rgba(255,255,255,.18);border-radius:8px;padding:7px 10px}' +
-      '#sb-hud .bar{height:9px;background:rgba(0,0,0,.55);border-radius:5px;overflow:hidden;border:1px solid rgba(255,255,255,.25)}' +
-      '#sb-hud .bar>i{display:block;height:100%}' +
-      '#sb-radio,#sb-mapbtn{pointer-events:auto;cursor:pointer}' +
-      '#sb-toast{position:absolute;left:50%;top:11%;transform:translateX(-50%);font-size:17px;font-weight:bold;color:#ffe14d;opacity:0;transition:opacity .3s;text-align:center}' +
-      '#sb-obj{position:absolute;left:50%;top:9%;transform:translateX(-50%);font-size:13px;color:#cfe6ff;opacity:0;transition:opacity .3s}' +
-      '#sb-dialog{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);width:520px;max-width:88vw;background:rgba(5,8,16,.85);border:1px solid #ff2a7a;border-radius:10px;padding:10px 12px;display:none;align-items:center;gap:12px}' +
-      '#sb-big{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;background:rgba(0,0,0,.45)}' +
-      '#sb-title{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;z-index:45;color:#fff;font-family:Arial,sans-serif;text-align:center;pointer-events:none}' +
-      '#sb-mm{border-radius:50%;border:2px solid rgba(255,255,255,.6);box-shadow:0 0 0 4px rgba(0,0,0,.35)}';
-    document.head.appendChild(st);
+  function st() { return SB.state; }
+  function num(v, d) { v = Number(v); return isFinite(v) ? v : (d || 0); }
+  function cash() {
+    var c = num(st().cash, 0);
+    if (typeof SB.cash === 'number') c = Math.max(c, SB.cash);
+    if (SB.player && typeof SB.player.cash === 'number') c = Math.max(c, SB.player.cash);
+    if (SB.missions && typeof SB.missions.cash === 'number') c = Math.max(c, SB.missions.cash);
+    return c;
   }
-  function build() {
-    css();
-    root = el('div', 'sb-hud', document.body);
-
-    var tl = el('div', null, root);
-    tl.style.cssText = 'position:absolute;left:12px;top:10px;display:flex;flex-direction:column;gap:5px';
-    els.cash = el('div', null, tl, ''); els.cash.className = 'panel'; els.cash.style.cssText = 'font-size:21px;font-weight:bold;color:#39d353';
-    els.clock = el('div', null, tl, ''); els.clock.className = 'panel'; els.clock.style.fontSize = '13px';
-    els.story = el('div', null, tl, ''); els.story.className = 'panel'; els.story.style.fontSize = '13px';
-    els.loc = el('div', null, tl, ''); els.loc.className = 'panel'; els.loc.style.fontSize = '12px'; els.loc.style.color = '#cfe6ff';
-
-    var tr = el('div', null, root);
-    tr.style.cssText = 'position:absolute;right:12px;top:10px;display:flex;flex-direction:column;gap:5px;align-items:flex-end;width:250px';
-    els.stars = el('div', null, tr, ''); els.stars.style.cssText = 'font-size:22px;letter-spacing:3px;color:#ffd23f';
-    els.wanted = el('div', null, tr, ''); els.wanted.style.cssText = 'font-size:11px;letter-spacing:2px;color:#ffb3c1';
-    var rep = el('div', null, tr, ''); rep.className = 'panel'; rep.style.width = '100%'; rep.style.boxSizing = 'border-box';
-    els.rep = el('div', null, rep, ''); els.rep.style.cssText = 'font-size:12px;font-weight:bold';
-    els.repbar = el('div', null, rep, ''); els.repbar.className = 'bar'; els.repbar.innerHTML = '<i id="sb-repfill" style="background:#ff2a7a;width:0%"></i>';
-    els.radio = el('div', 'sb-radio', tr, ''); els.radio.className = 'panel'; els.radio.style.cssText = 'width:100%;box-sizing:border-box;text-align:right';
-    els.radio.onclick = function () { if (SB.radio) SB.radio.next(); };
-
-    var rr = el('div', null, root);
-    rr.style.cssText = 'position:absolute;right:12px;top:172px;width:250px';
-    els.resp = el('div', null, rr, ''); els.resp.className = 'panel';
-
-    var lm = el('div', null, root);
-    lm.style.cssText = 'position:absolute;left:12px;top:172px;width:270px';
-    els.mission = el('div', null, lm, ''); els.mission.className = 'panel';
-
-    var bl = el('div', null, root);
-    bl.style.cssText = 'position:absolute;left:12px;bottom:12px';
-    mm = el('canvas', 'sb-mm', bl); mm.width = 180; mm.height = 180;
-    mmCtx = mm.getContext('2d');
-    els.mmLabel = el('div', null, bl, 'SOLMAR BAY'); els.mmLabel.style.cssText = 'text-align:center;font-size:11px;letter-spacing:3px;margin-top:4px;color:#cfe6ff';
-
-    var br = el('div', null, root);
-    br.style.cssText = 'position:absolute;right:12px;bottom:12px;display:flex;flex-direction:column;gap:5px;align-items:flex-end';
-    els.weapons = el('div', null, br, ''); els.weapons.className = 'panel'; els.weapons.style.cssText = 'display:flex;gap:6px';
-    var sp = el('div', null, br, ''); sp.className = 'panel'; sp.style.cssText = 'text-align:right;min-width:210px';
-    els.speed = el('div', null, sp, ''); els.speed.style.cssText = 'font-size:30px;font-weight:bold;line-height:1';
-    els.vehicle = el('div', null, sp, ''); els.vehicle.style.cssText = 'font-size:12px;color:#ffd23f';
-    els.cond = el('div', null, sp, ''); els.cond.className = 'bar'; els.cond.innerHTML = '<i id="sb-condfill" style="background:#39d353;width:100%"></i>';
-    els.condLabel = el('div', null, sp, ''); els.condLabel.style.cssText = 'font-size:11px;color:#9fb4d8';
-
-    els.toast = el('div', 'sb-toast', root);
-    els.obj = el('div', 'sb-obj', root);
-    els.dialog = el('div', 'sb-dialog', root);
-    els.dialog.innerHTML = '<div id="sb-portrait" style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#ff2a7a,#ff9f1c);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:bold;flex:none">M</div><div style="min-width:0"><div id="sb-dlg-name" style="font-size:13px;font-weight:bold;color:#ffd23f"></div><div id="sb-dlg-line" style="font-size:14px;line-height:1.35"></div></div>';
-    els.brief = el('div', null, root, '');
-    els.brief.style.cssText = 'position:absolute;left:50%;top:26%;transform:translateX(-50%);width:420px;max-width:88vw;background:rgba(5,8,16,.88);border:2px solid #ffd23f;border-radius:10px;padding:12px 14px;display:none';
-    var big = el('div', 'sb-big', root);
-    big.innerHTML = '<div id="sb-big-title" style="font-size:64px;font-weight:bold;letter-spacing:8px;color:#ff2a5a"></div><div id="sb-big-sub" style="font-size:16px;color:#fff"></div>';
-    els.big = big;
-
-    titleEl = el('div', 'sb-title', document.body);
-    titleEl.innerHTML = '<div style="font-size:72px;font-weight:bold;letter-spacing:12px;text-shadow:0 4px 24px rgba(0,0,0,.8)">SOLMAR BAY</div><div style="font-size:18px;letter-spacing:4px;color:#ffd23f;margin-top:6px">SUN · SAND · SIN</div><div style="font-size:15px;margin-top:26px;color:#fff">Press ENTER to start &nbsp;·&nbsp; WASD drive &nbsp;·&nbsp; E steal car &nbsp;·&nbsp; M map &nbsp;·&nbsp; Q/R radio</div><div style="font-size:13px;margin-top:10px;color:#cfe6ff">8 story jobs · Wanted 0–5 ★ · Helicopters · 3 radio stations</div>';
+  function rep() {
+    var r = num(st().rep, 0);
+    if (SB.missions && typeof SB.missions.rep === 'number') r = Math.max(r, SB.missions.rep);
+    if (SB.player && typeof SB.player.rep === 'number') r = Math.max(r, SB.player.rep);
+    return r;
   }
-  function money(n) { return '$' + (n || 0).toLocaleString('en-US'); }
-  function responseList() {
-    if (SB.police && SB.police.responseList) {
-      try { var r = SB.police.responseList(); if (r && r.length) return r; } catch (e) {}
+  function repInfo() {
+    var th = [0, 300, 900, 1600, 2400, 4200];
+    var ti = ['STREET KID', 'CORNER HUSTLER', 'NEON RUNNER', 'BAY HUSTLER', 'SOLMAR KING'];
+    var r = rep(), lv = 1, i;
+    for (i = 0; i < th.length; i++) if (r >= th[i]) lv = i + 1;
+    if (lv > 5) lv = 5;
+    return { level: lv, title: ti[lv - 1], xpInto: r, xpNext: th[lv] || th[5] };
+  }
+  function stars() {
+    if (SB.police && typeof SB.police.stars === 'function') {
+      try { return Math.max(0, Math.min(5, num(SB.police.stars(), 0) | 0)); } catch (e) {}
     }
-    if (!S.wanted) return [];
-    var p = W.player && W.player.pos;
-    var list = [];
-    var n = S.wanted >= 5 ? 6 : S.wanted + (S.wanted >= 4 ? 1 : 0);
-    var dists = [35, 9, 17, 22, 28, 41];
-    var stats = ['SPOTLIGHT', 'RAMMING', 'PURSUIT', 'PURSUIT', 'ROADBLOCK', 'SEARCHING'];
-    for (var i = 0; i < n && i < UNITS.length; i++) {
-      var d = dists[i];
-      if (p && W.police && W.police[i] && W.police[i].pos) d = Math.round(Math.sqrt((W.police[i].pos.x - p.x) * (W.police[i].pos.x - p.x) + (W.police[i].pos.z - p.z) * (W.police[i].pos.z - p.z)));
-      else if (p && W.heli && i === 0) d = 35;
-      list.push({ unit: UNITS[i], dist: d, status: stats[i] });
-    }
-    return list;
+    if (typeof st().wanted === 'number') return Math.max(0, Math.min(5, st().wanted | 0));
+    var h = num(st().heat, 0);
+    if (h <= 5) return h | 0;
+    return h <= 0 ? 0 : h < 20 ? 1 : h < 40 ? 2 : h < 60 ? 3 : h < 80 ? 4 : 5;
   }
-  function refresh() {
-    if (!root) return;
-    var hide = S.scenePreset === 'title' || !S.started;
-    root.style.display = hide ? 'none' : 'block';
-    if (titleEl) titleEl.style.display = S.scenePreset === 'title' ? 'flex' : 'none';
-    if (hide) return;
-    els.cash.textContent = money(S.cash);
-    els.clock.textContent = SB.formatClock() + '  ·  DAY ' + S.day + '  ·  ' + (S.timeOfDay || 'sunset').toUpperCase();
-    els.story.textContent = 'STORY ' + S.missionsDone + '/' + S.missionsTotal + '   ☀ Coins ' + S.coins + '/' + S.coinsTotal + '   ◉ Tapes ' + S.tapes + '/' + S.tapesTotal;
-    els.loc.textContent = '📍 ' + (S.location || '').toUpperCase() + (S.street ? ' · ' + S.street : '');
-    var stars = '';
-    for (var i = 0; i < 5; i++) stars += i < S.wanted ? '★' : '☆';
-    els.stars.textContent = stars;
-    els.wanted.textContent = S.wanted ? 'WANTED ' + S.wanted + '/5' + (S.wanted >= 4 ? ' · IN SIGHT' : '') : 'CLEAN';
-    var rp = SB.repProgress ? SB.repProgress() : { level: S.repLevel, title: S.repTitle, xpInto: 0, xpNext: 1 };
-    els.rep.textContent = 'REP ' + rp.level + ' · ' + rp.title + '  ' + (rp.xpInto || 0) + '/' + (rp.xpNext || 0);
-    var rf = $('sb-repfill');
-    if (rf) rf.style.width = (rp.xpNext ? Math.min(100, Math.round(100 * rp.xpInto / rp.xpNext)) : 100) + '%';
-    var r = S.radio || { name: 'WAVE 88.1', track: '', playing: true };
-    els.radio.innerHTML = '♪ <b>' + r.name + '</b> · ' + (r.playing ? '▶' : '❚❚') + '<br><span style="font-size:12px;color:#cfe6ff">' + r.track + '</span><br><span style="font-size:11px;color:#9fb4d8">Q / R switch station</span>';
-    var list = responseList();
-    if (list.length) {
-      var h = '<b style="font-size:12px;letter-spacing:2px;color:#9fb4d8">SOLMAR PD RESPONSE</b><br>';
-      for (var u = 0; u < list.length; u++) h += '<div style="display:flex;justify-content:space-between;font-size:13px"><span>' + list[u].unit + ' · ' + list[u].dist + ' m</span><b style="color:' + (list[u].status === 'RAMMING' ? '#ff5a5a' : list[u].status === 'SPOTLIGHT' ? '#ffd23f' : '#8affc1') + '">' + list[u].status + '</b></div>';
-      els.resp.innerHTML = h; els.resp.style.display = 'block';
-    } else els.resp.style.display = 'none';
-    var m = S.mission;
+  function clock() {
+    if (typeof SB.formatClock === 'function') { try { return SB.formatClock(); } catch (e) {} }
+    var s = st(), d = DAYS[(num(s.day, 1) - 1) % 7] || 'FRI';
+    var h = num(s.hour, 17), m = num(s.min != null ? s.min : s.minute, 24);
+    return d + ' ' + (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  }
+  function activeMission() {
+    if (SB.missions) {
+      var a = SB.missions.active;
+      if (typeof a === 'function') { try { return a() || null; } catch (e) { return null; } }
+      if (a && typeof a === 'object') return a;
+      if (SB.missions.list) for (var i = 0; i < SB.missions.list.length; i++)
+        if (SB.missions.list[i].active) return SB.missions.list[i];
+    }
+    return st().mission || null;
+  }
+  function fmt$(n) { return '$' + num(n, 0).toLocaleString('en-US'); }
+  function setTxt(node, v) { if (node && last[node.id] !== v) { last[node.id] = v; node.textContent = v; } }
+  function heroPos() {
+    if (SB.engine && typeof SB.engine.heroPos === 'function') {
+      try { var p = SB.engine.heroPos(); if (p) return { x: p[0], z: p[1] }; } catch (e) {}
+    }
+    if (SB.player && typeof SB.player.pos === 'function') {
+      try { var q = SB.player.pos(); if (q) return { x: q[0], z: q[1] }; } catch (e) {}
+    }
+    if (SB.world && SB.world.player && SB.world.player.pos) return { x: SB.world.player.pos.x, z: SB.world.player.pos.z };
+    return null;
+  }
+  function buildDom() {
+    var root = $('hud');
+    if (!root) root = mk('div', 'hud', '', document.body);
+    el.root = root;
+    var tl = mk('div', 'hud-tl', 'hud-box', root);
+    el.cash = mk('div', 'hud-cash', 'hud-cash', tl);
+    var repRow = mk('div', 'hud-rep', '', tl);
+    el.repTitle = mk('span', 'hud-reptitle', '', repRow);
+    var bar = mk('div', 'hud-repbar', 'hud-bar', repRow);
+    el.repFill = mk('div', 'hud-repfill', 'hud-fill rep', bar);
+    el.story = mk('div', 'hud-story', '', tl);
+    var tc = mk('div', 'hud-clock', 'hud-box', root);
+    el.clock = mk('div', 'hud-clocktime', '', tc);
+    el.season = mk('div', 'hud-season', '', tc);
+    var tr = mk('div', 'hud-tr', '', root);
+    el.mmWrap = mk('div', 'hud-mmwrap', '', tr);
+    el.wanted = mk('div', 'hud-wanted', '', tr);
+    // Kolom kiri: panel misi + response list dalam SATU flow (tidak bisa menimpa).
+    var mc = mk('div', 'hud-mcol', '', root);
+    var mp = mk('div', 'hud-mission', 'hud-box', mc);
+    el.mTitle = mk('div', 'hud-mtitle', '', mp);
+    el.mStage = mk('div', 'hud-mstage', '', mp);
+    el.mObj = mk('div', 'hud-mobj', '', mp);
+    el.mTimer = mk('div', 'hud-mtimer', '', mp);
+    el.mPayout = mk('div', 'hud-mpayout', '', mp);
+    el.response = mk('div', 'hud-response', 'hud-box', mc);
+    var cp = mk('div', 'hud-crew', 'hud-box', root);
+    mk('div', '', 'hud-crewhead', cp).textContent = 'CREW';
+    CREW.forEach(function (c, i) {
+      var row = mk('div', 'hud-crew' + i, 'hud-crewrow', cp);
+      var dot = mk('span', '', 'hud-dot', row);
+      dot.style.background = c[2];
+      mk('span', '', '', row).textContent = c[0] + ' — ' + c[1];
+    });
+    el.loc = mk('div', 'hud-loc', 'hud-box', root);
+    // Kanan-bawah SATU klaster flow: speed, kendaraan, wheel, radio.
+    var br = mk('div', 'hud-br', '', root);
+    el.speed = mk('div', 'hud-speed', 'hud-box', br);
+    el.veh = mk('div', 'hud-veh', '', br);
+    el.wheel = mk('div', 'hud-wheel', '', br);
+    el.wheelSlots = [];
+    WEAPONS.forEach(function (w) {
+      var s = mk('div', 'hud-wslot-' + w[0], 'hud-wslot', el.wheel);
+      s.textContent = w[1] + ' ' + w[2];
+      el.wheelSlots.push(s);
+    });
+    el.radio = mk('div', 'hud-radio', 'hud-box', br);
+    var hb = mk('div', 'hud-bars', '', root);
+    var hrow = mk('div', '', 'hud-barow', hb);
+    mk('span', '', 'hud-barlabel', hrow).textContent = 'HP';
+    var hb2 = mk('div', '', 'hud-bar', hrow);
+    el.hpFill = mk('div', 'hud-hpfill', 'hud-fill hp', hb2);
+    var arow = mk('div', '', 'hud-barow', hb);
+    mk('span', '', 'hud-barlabel', arow).textContent = 'ARMOR';
+    var ab2 = mk('div', '', 'hud-bar', arow);
+    el.arFill = mk('div', 'hud-arfill', 'hud-fill ar', ab2);
+    el.toast = mk('div', 'hud-toast', '', root);
+    var dlg = $('dlg');
+    if (!dlg) {
+      dlg = mk('div', 'dlg', 'hud-dlg', root);
+      var dp = mk('div', 'dlg-portrait', '', dlg);
+      el.dlgImg = mk('img', 'dlg-img', '', dp);
+      var db = mk('div', 'dlg-body', '', dlg);
+      el.dlgName = mk('div', 'dlg-name', '', db);
+      el.dlgRole = mk('div', 'dlg-role', '', db);
+      el.dlgLines = mk('div', 'dlg-lines', '', db);
+    }
+    el.dlg = dlg;
+    el.paused = mk('div', 'hud-paused', '', root);
+    el.paused.textContent = 'PAUSED — [P] RESUME';
+    el.paused.style.display = 'none';
+    el.busted = mk('div', 'hud-busted', 'hud-big', root);
+    el.busted.textContent = 'BUSTED';
+    el.busted.style.display = 'none';
+    el.wasted = mk('div', 'hud-wasted', 'hud-big', root);
+    el.wasted.textContent = 'WASTED';
+    el.wasted.style.display = 'none';
+  }
+  function drawMinimap() {
+    if (!mmCanvas) {
+      mmCanvas = document.createElement('canvas');
+      mmCanvas.id = 'hud-minimap';
+      mmCanvas.width = 150; mmCanvas.height = 150;
+      el.mmWrap.appendChild(mmCanvas);
+      mmCtx = mmCanvas.getContext('2d');
+    }
+    if (!mmCtx) return;
+    var c = mmCtx, W = 150, H = 150, cx = W / 2, cy = H / 2;
+    var b = { minX: -560, maxX: 470, minZ: -470, maxZ: 530 };
+    if (SB.world && SB.world.bounds) b = SB.world.bounds;
+    var sc = Math.min(W / (b.maxX - b.minX), H / (b.maxZ - b.minZ));
+    function px(x) { return cx + (x - (b.minX + b.maxX) / 2) * sc; }
+    function py(z) { return cy + (z - (b.minZ + b.maxZ) / 2) * sc; }
+    c.save();
+    c.beginPath(); c.arc(cx, cy, 73, 0, 6.2832); c.clip();
+    c.fillStyle = '#0c1420'; c.fillRect(0, 0, W, H);
+    var i, d;
+    var dists = (SB.city && SB.city.districts) || (SB.world && SB.world.districts) || [];
+    for (i = 0; i < dists.length; i++) {
+      d = dists[i];
+      var x0 = (d.x0 != null ? d.x0 : d.cx - d.w / 2), z0 = (d.z0 != null ? d.z0 : d.cz - d.d / 2);
+      var w = (d.x1 != null ? d.x1 - d.x0 : d.w), h = (d.z1 != null ? d.z1 - d.z0 : d.d);
+      c.fillStyle = d.tint || '#1a2b3d';
+      c.fillRect(px(x0), py(z0), w * sc, h * sc);
+    }
+    var roads = (SB.city && SB.city.roads) || (SB.world && SB.world.roads) || [];
+    c.strokeStyle = '#3a4a5a'; c.lineWidth = 2;
+    for (i = 0; i < roads.length; i++) {
+      var r = roads[i];
+      c.beginPath();
+      if (r.axis) {
+        if (r.axis === 'z') { c.moveTo(px(r.at), py(r.from)); c.lineTo(px(r.at), py(r.to)); }
+        else { c.moveTo(px(r.from), py(r.at)); c.lineTo(px(r.to), py(r.at)); }
+      } else { c.moveTo(px(r.x0), py(r.z0)); c.lineTo(px(r.x1), py(r.z1)); }
+      c.stroke();
+    }
+    function dot(x, z, color, rad) {
+      c.fillStyle = color; c.beginPath(); c.arc(px(x), py(z), rad || 3, 0, 6.2832); c.fill();
+    }
+    var hp = heroPos();
+    if ((SB.police && SB.police.heli) || (SB.world && SB.world.heli)) {
+      if (hp) {
+        c.strokeStyle = 'rgba(255,80,80,0.9)'; c.lineWidth = 1.5;
+        c.beginPath(); c.arc(px(hp.x), py(hp.z), 26, 0, 6.2832); c.stroke();
+      }
+    }
+    var sp = (SB.world && SB.world.spawns) || {};
+    if (sp.safehouse) dot(sp.safehouse.x, sp.safehouse.z, '#39d95e', 3);
+    if (sp.shops) for (i = 0; i < sp.shops.length; i++) dot(sp.shops[i].x, sp.shops[i].z, '#c07bff', 2);
+    var cops = (SB.police && SB.police.cops) || (SB.world && SB.world.police) || [];
+    for (i = 0; i < cops.length; i++) {
+      var p = cops[i];
+      if (p.pos) dot(p.pos.x, p.pos.z, '#ff4040', 3);
+      else if (typeof p.x === 'number') dot(p.x, p.z, '#ff4040', 3);
+    }
+    var m = activeMission();
+    if (m && m.target) dot(m.target.x, m.target.z, '#ffd23f', 4);
+    if (hp) {
+      var hd = (SB.world && SB.world.player && SB.world.player.heading) || (SB.vehicles && SB.vehicles.active && SB.vehicles.active.heading) || 0;
+      c.save(); c.translate(px(hp.x), py(hp.z)); c.rotate(-hd);
+      c.fillStyle = '#ffffff';
+      c.beginPath(); c.moveTo(0, -6); c.lineTo(4, 5); c.lineTo(-4, 5); c.closePath(); c.fill();
+      c.restore();
+    }
+    c.restore();
+    c.strokeStyle = 'rgba(255,255,255,0.55)'; c.lineWidth = 2;
+    c.beginPath(); c.arc(cx, cy, 73, 0, 6.2832); c.stroke();
+  }
+  function weaponId() {
+    if (SB.player && typeof SB.player.weapon === 'number') {
+      var w = WEAPONS[SB.player.weapon - 1];
+      return w ? w[0] : 'fists';
+    }
+    return st().weapon || 'fists';
+  }
+  function update() {
+    if (!el.root) return;
+    var s = st(), k;
+    var hidden = s.started === false || s.preset === 'title' || s.scenePreset === 'title';
+    el.root.style.display = hidden ? 'none' : '';
+    if (hidden) return;
+    setTxt(el.cash, fmt$(cash()));
+    var ri = repInfo();
+    setTxt(el.repTitle, ri.title + ' · REP ' + rep() + ' · LV ' + ri.level);
+    if (el.repFill) el.repFill.style.width = Math.max(0, Math.min(100, (ri.xpInto / Math.max(1, ri.xpNext)) * 100)) + '%';
+    var done = num(s.missionsDone, 0);
+    if (SB.missions && SB.missions.list) {
+      var dc = 0;
+      for (k = 0; k < SB.missions.list.length; k++) if (SB.missions.list[k].done) dc++;
+      if (dc > done) done = dc;
+    }
+    setTxt(el.story, 'STORY ' + done + '/' + num(s.missionsTotal, 8) + ' · COINS ' + num(s.coins, 0) + '/' + num(s.coinsTotal, 20));
+    setTxt(el.clock, clock() + ' · DAY ' + num(s.day, 1));
+    setTxt(el.season, (s.timeLabel || s.timeOfDay || 'SUNSET').toUpperCase() + (s.weather && s.weather !== 'clear' ? ' · ' + s.weather.toUpperCase() : ''));
+    var n = stars(), starTxt = '';
+    for (k = 0; k < 5; k++) starTxt += k < n ? '★' : '☆';
+    setTxt(el.wanted, starTxt);
+    el.wanted.style.color = n >= 4 ? '#ff4040' : n >= 2 ? '#ffb347' : '#ffffff';
+    if (el.hpFill) el.hpFill.style.width = Math.max(0, Math.min(100, num(s.health, 100))) + '%';
+    if (el.arFill) el.arFill.style.width = Math.max(0, Math.min(100, num(s.armor, 0))) + '%';
+    var m = activeMission();
     if (m) {
-      els.mission.innerHTML = '<b style="color:#ffd23f;font-size:12px;letter-spacing:2px">MISSION — ' + (m.contact || 'MARA SOLIS') + '</b><br><b style="font-size:15px">' + m.title + '</b><br><span style="font-size:12px;color:#cfe6ff">STAGE ' + (m.stage || 1) + '/' + (m.stageTotal || 1) + ' · $' + (m.payout || 0).toLocaleString('en-US') + '</span><br><span style="font-size:13px">NEXT: ' + (m.objective || '') + '</span>' + (m.timer ? '<br><span style="font-size:14px;color:#ff5a5a">⏱ ' + m.timer + '</span>' : '');
-      els.mission.style.display = 'block';
-    } else els.mission.style.display = 'none';
-    els.speed.textContent = Math.round(S.speedKmh || 0) + ' KM/H';
-    els.vehicle.textContent = (S.vehicle ? S.vehicle.name + ' · ' + (S.gear || 'N') : 'ON FOOT · ' + (S.gear || 'N'));
-    var cond = S.vehicle ? (S.vehicle.condition || 0) : 100;
-    var cf = $('sb-condfill');
-    if (cf) { cf.style.width = cond + '%'; cf.style.background = cond > 50 ? '#39d353' : cond > 25 ? '#ffd23f' : '#ff5a5a'; }
-    els.condLabel.textContent = S.vehicle ? 'CONDITION ' + cond + '% · [Space] handbrake' : 'WASD walk · [E] enter vehicle';
-    var wh = '';
-    for (var w = 0; w < WPN.length; w++) {
-      var id = WPN[w][0], wd = S.weapons[id] || {};
-      var locked = !!wd.locked, active = S.weapon === id;
-      var ammo = id === 'fists' ? '∞' : (wd.ammo !== undefined ? wd.ammo + '/' + (wd.reserve || 0) : '—');
-      wh += '<span style="padding:4px 7px;border-radius:5px;font-size:12px;background:' + (active ? '#ff2a7a' : locked ? '#222' : '#1a2a44') + ';color:' + (locked ? '#777' : '#fff') + ';opacity:' + (locked ? 0.55 : 1) + '">' + (locked ? '🔒 ' : '') + WPN[w][1] + ' ' + ammo + '</span>';
+      var payout = m.payout;
+      if (payout == null && SB.missions && SB.missions.list)
+        for (k = 0; k < SB.missions.list.length; k++)
+          if (SB.missions.list[k].id === m.id) payout = SB.missions.list[k].payout;
+      setTxt(el.mTitle, (m.name || m.title || 'MISSION').toUpperCase());
+      setTxt(el.mStage, 'STAGE ' + num(m.stage, 1) + '/' + num(m.stageTotal, 1));
+      setTxt(el.mObj, 'NEXT: ' + (m.objective || s.objective || ''));
+      setTxt(el.mTimer, m.timer ? '⏱ ' + Math.floor(m.timer / 60) + ':' + String(Math.floor(m.timer % 60)).padStart(2, '0') : '');
+      setTxt(el.mPayout, 'PAYOUT ' + fmt$(payout || 0));
+    } else {
+      setTxt(el.mTitle, 'NO ACTIVE MISSION');
+      setTxt(el.mStage, '');
+      setTxt(el.mObj, s.objective ? 'NEXT: ' + s.objective : 'Start a job: press M for map');
+      setTxt(el.mTimer, '');
+      setTxt(el.mPayout, '');
     }
-    els.weapons.innerHTML = wh;
-    if (SB.audio) {
-      if (SB.audio.engine) SB.audio.engine(S.speedKmh || 0);
-      if (SB.audio.siren) SB.audio.siren(S.wanted > 0);
+    var resp = [];
+    if (SB.police) {
+      if (SB.police.response && SB.police.response.length != null) resp = SB.police.response;
+      else if (typeof SB.police.responseList === 'function') {
+        try { resp = SB.police.responseList() || []; } catch (e) { resp = []; }
+      }
     }
+    var rTxt = '', sight = s.inSight === true || (n > 0 && resp.length > 0);
+    if (n > 0 && resp.length) {
+      rTxt = 'RESPONSE' + (sight ? ' — IN SIGHT' : '') + '\n';
+      resp.slice(0, 4).forEach(function (u) {
+        rTxt += (u.name || u.unit || 'UNIT') + ' · ' + num(u.dist, 0) + 'm · ' + (u.status || 'PURSUIT') + '\n';
+      });
+    } else if (n > 0) rTxt = 'RESPONSE' + (sight ? ' — IN SIGHT' : '') + '\n' + n + '★ — units inbound';
+    if (el.response) {
+      if (last.respHtml !== rTxt) { last.respHtml = rTxt; el.response.innerHTML = rTxt.split('\n').join('<br>'); }
+      el.response.style.display = rTxt ? '' : 'none';
+    }
+    var vName = s.vehicleName && s.vehicleName !== '—' ? s.vehicleName : null;
+    var veh = s.vehicle || (SB.vehicles && SB.vehicles.active) || (SB.world && SB.world.player && SB.world.player.vehicle);
+    if (vName || veh) {
+      setTxt(el.speed, Math.round(num(s.speedKmh, 0)) + ' km/h · ' + (s.gear || 'N'));
+      var cond = s.vehicleCond != null ? s.vehicleCond : (veh && veh.condition != null ? veh.condition : 100);
+      var vstat = s.vehicleStatus || (cond < 60 ? 'DENTED' : 'OK');
+      setTxt(el.veh, (vName || veh.name || 'CAR') + ' · ' + Math.round(cond) + '%' + (vstat === 'DENTED' ? ' · DENTED' : cond < 90 ? ' · SCRATCHED' : ''));
+    } else {
+      setTxt(el.speed, 'ON FOOT');
+      setTxt(el.veh, s.location || '');
+    }
+    var wps = s.weapons || {}, cur = weaponId();
+    el.wheelSlots.forEach(function (slot, i) {
+      var w = WEAPONS[i], wp = wps[w[0]] || {};
+      var locked = !!wp.locked || (w[0] === 'rifle' && !wps.rifle);
+      var ammo = wp.ammo === Infinity ? '∞' : (wp.ammo != null ? num(wp.ammo, 0) : '');
+      var txt = w[2] + (locked ? ' 🔒' : (ammo === '' ? '' : ' ' + ammo));
+      if (last[slot.id] !== txt) { last[slot.id] = txt; slot.textContent = txt; }
+      slot.className = 'hud-wslot' + (cur === w[0] ? ' active' : '') + (locked ? ' locked' : '');
+    });
+    if (SB.radio && typeof SB.radio.current === 'function') {
+      try {
+        var curR = SB.radio.current();
+        setTxt(el.radio, '♪ ' + (curR.name || '') + ' — ' + (curR.track || '') + (curR.playing === false ? ' (PAUSED)' : ''));
+      } catch (e) { setTxt(el.radio, '♪ RADIO'); }
+    } else if (s.radio) setTxt(el.radio, '♪ ' + (s.radio.name || '') + ' — ' + (s.radio.track || ''));
+    setTxt(el.loc, (s.location || '') + (s.street ? ' · ' + s.street : ''));
+    if (el.paused) el.paused.style.display = (s.paused && !staging) ? '' : 'none';
+    drawMinimap();
+  }
+  var toastTimer = 0;
+  function toast(msg) {
+    if (!el.toast) return;
+    el.toast.textContent = msg;
+    el.toast.style.opacity = '1';
+    toastTimer++;
+    var t = toastTimer;
+    setTimeout(function () { if (t === toastTimer && el.toast) el.toast.style.opacity = '0'; }, 2600);
+  }
+  function setStaging(b) {
+    staging = !!b;
+    SB.state.staging = staging;
+    if (el.paused) el.paused.style.display = 'none';
+    if (el.root) el.root.classList.toggle('staging', staging);
+  }
+  function showBusted() { if (el.busted) el.busted.style.display = ''; }
+  function showWasted() { if (el.wasted) el.wasted.style.display = ''; }
+  function showMissionBrief(m) {
+    if (m) toast('NEW JOB: ' + (m.name || m.title || 'MISSION') + ' — ' + fmt$(m.payout || 0));
+  }
+  function setObjective(t) { if (el.mObj) el.mObj.textContent = 'NEXT: ' + t; }
+  function setPaused(b) {
+    SB.state.paused = !!b;
+    if (typeof SB.setPaused === 'function') { try { SB.setPaused(!!b); } catch (e) {} }
+  }
+  function onKey(e) {
+    var s = st();
+    if (s.started === false) return;
+    if (e.code === 'KeyM') { if (SB.map) SB.map.toggle(); return; }
+    if (e.code === 'Escape') {
+      if (SB.map) SB.map.hide();
+      if (SB.shops) SB.shops.close();
+      if (SB.dialog) SB.dialog.hide();
+      return;
+    }
+    if (s.paused) { if (e.code === 'KeyP') setPaused(false); return; }
+    if (e.code === 'KeyP') { setPaused(true); return; }
+    if (e.code === 'KeyQ') { if (SB.radio) SB.radio.next(); return; }
+    if (e.code === 'KeyR') {
+      if (SB.combat && typeof SB.combat.reload === 'function') SB.combat.reload();
+      return;
+    }
+    if (e.code === 'KeyF') { if (SB.shops) SB.shops.open('weapons'); return; }
+    var di = { Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4 }[e.code];
+    if (di != null) {
+      if (SB.combat && typeof SB.combat.selectWeapon === 'function') SB.combat.selectWeapon(WEAPONS[di][0]);
+      else if (SB.player) { SB.player.weapon = di + 1; SB.state.weapon = WEAPONS[di][0]; }
+    }
+  }
+  function init() {
+    if (el.root) return;
+    buildDom();
+    if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('keydown', onKey);
+    if (typeof SB.registerUpdate === 'function') { try { SB.registerUpdate(update); } catch (e) {} }
+    if (typeof SB.on === 'function') {
+      SB.on('mission-complete', function () { if (SB.save) SB.save.autosave(); });
+      SB.on('busted', showBusted);
+      SB.on('wasted', showWasted);
+      SB.on('mission-start', function (m) { showMissionBrief(m); });
+      SB.on('scene', function (ev) {
+        if (ev && ev.name === 'map' && SB.map) SB.map.show();
+        if (ev && ev.name !== 'map' && SB.map) SB.map.hide();
+      });
+    }
+    update();
   }
   SB.hud = {
-    init: function () {
-      if (root) return;
-      build();
-      SB.on('scene', function (d) {
-        if (!d) return;
-        if (d.name === 'map' && SB.map) SB.map.show();
-        else if (SB.map && SB.map.isOpen()) SB.map.hide();
-        if (d.name === 'cover' || d.name === 'night') SB.hud.showDialog({ name: 'MARA SOLIS', role: 'FIXER · SOLMAR BAY', portrait: 'assets/mara.jpg', line: MARA_LINES[d.name] });
-        else if (d.name !== 'mission') SB.hud.hideDialog();
-        refresh();
-      });
-      SB.on('mission-start', function (m) { if (m) SB.hud.showMissionBrief(m); });
-      SB.on('mission-complete', function (m) { SB.hud.toast('✓ MISSION COMPLETE — ' + (m && m.title ? m.title + ' ' : '') + '+$' + (m && m.payout ? m.payout : '')); });
-      SB.on('busted', function () { SB.hud.showBusted(); });
-      SB.on('wasted', function () { SB.hud.showWasted(); });
-      SB.on('vehicle-stolen', function (v) { SB.hud.toast('🚗 VEHICLE STOLEN: ' + (v && v.name ? v.name : 'car') + ' — +heat'); });
-      SB.registerUpdate(function (dt) { SB.hud.update(dt); });
-      refresh();
-    },
-    update: function (dt) {
-      acc += dt; mmAcc += dt;
-      if (acc >= 0.12) { acc = 0; refresh(); }
-      if (mmAcc >= 0.2) { mmAcc = 0; SB.hud.drawMinimap(); }
-      if (toastTimer > 0) { toastTimer -= dt; if (toastTimer <= 0 && els.toast) els.toast.style.opacity = 0; }
-      if (briefTimer > 0) { briefTimer -= dt; if (briefTimer <= 0 && els.brief) els.brief.style.display = 'none'; }
-    },
-    drawMinimap: function () {
-      if (!mmCtx || !root || root.style.display === 'none') return;
-      var c = mmCtx, W2 = 180, H2 = 180;
-      var X0 = -560, Z0 = -470, SX = W2 / 1030, SZ = H2 / 1000;
-      var X = function (x) { return (x - X0) * SX; }, Z = function (z) { return (z - Z0) * SZ; };
-      c.save();
-      c.clearRect(0, 0, W2, H2);
-      c.beginPath(); c.arc(90, 90, 88, 0, 6.2832); c.clip();
-      c.fillStyle = '#0d1a2e'; c.fillRect(0, 0, W2, H2);
-      var rs = W.roads || [];
-      c.strokeStyle = '#5a6a80'; c.lineWidth = 3;
-      for (var i = 0; i < rs.length; i++) {
-        c.beginPath();
-        if (rs[i].axis === 'z') { c.moveTo(X(rs[i].at), Z(rs[i].from)); c.lineTo(X(rs[i].at), Z(rs[i].to)); }
-        else { c.moveTo(X(rs[i].from), Z(rs[i].at)); c.lineTo(X(rs[i].to), Z(rs[i].at)); }
-        c.stroke();
-      }
-      var sp = W.spawns || {};
-      if (sp.safehouse) { c.fillStyle = '#39d353'; c.fillRect(X(sp.safehouse.x) - 3, Z(sp.safehouse.z) - 3, 6, 6); }
-      var shops = sp.shops || [];
-      c.fillStyle = '#b57edc';
-      for (var s = 0; s < shops.length; s++) { c.beginPath(); c.arc(X(shops[s].x), Z(shops[s].z), 3, 0, 6.2832); c.fill(); }
-      if (S.mission) {
-        var spot = MISSION_SPOT[S.mission.id];
-        var t = spot && sp.missions ? sp.missions[spot] : null;
-        if (t) {
-          c.fillStyle = '#ffe14d'; c.beginPath(); c.arc(X(t.x), Z(t.z), 5, 0, 6.2832); c.fill();
-          c.strokeStyle = '#ffe14d'; c.lineWidth = 2; c.beginPath(); c.arc(X(t.x), Z(t.z), 9, 0, 6.2832); c.stroke();
-        }
-      }
-      var pol = W.police || [];
-      for (var p = 0; p < pol.length; p++) {
-        if (!pol[p].pos) continue;
-        c.fillStyle = '#4d9fff'; c.beginPath(); c.arc(X(pol[p].pos.x), Z(pol[p].pos.z), 4, 0, 6.2832); c.fill();
-      }
-      if (W.heli && W.heli.pos) {
-        c.fillStyle = '#ff5a5a'; c.beginPath(); c.arc(X(W.heli.pos.x), Z(W.heli.pos.z), 5, 0, 6.2832); c.fill();
-        c.strokeStyle = 'rgba(255,90,90,.7)'; c.lineWidth = 2;
-        c.beginPath(); c.arc(X(W.heli.pos.x), Z(W.heli.pos.z), 22, 0, 6.2832); c.stroke();
-      }
-      var pl = W.player;
-      if (pl && pl.pos) {
-        var hx = X(pl.pos.x), hy = Z(pl.pos.z), hd = pl.heading || 0;
-        c.fillStyle = '#fff';
-        c.beginPath();
-        c.moveTo(hx - Math.sin(hd) * 8, hy - Math.cos(hd) * 8);
-        c.lineTo(hx + Math.cos(hd) * 5 - Math.sin(hd) * -5, hy - Math.sin(hd) * 5 - Math.cos(hd) * -5);
-        c.lineTo(hx - Math.cos(hd) * 5 - Math.sin(hd) * -5, hy + Math.sin(hd) * 5 - Math.cos(hd) * -5);
-        c.closePath(); c.fill();
-        c.strokeStyle = '#ff2a7a'; c.lineWidth = 2; c.stroke();
-      }
-      c.restore();
-    },
-    toast: function (msg) {
-      if (!els.toast) return;
-      els.toast.textContent = msg; els.toast.style.opacity = 1; toastTimer = 3.5;
-    },
-    setObjective: function (text) {
-      if (!els.obj) return;
-      els.obj.textContent = '◆ ' + text; els.obj.style.opacity = 1;
-      setTimeout(function () { if (els.obj) els.obj.style.opacity = 0; }, 6000);
-    },
-    showDialog: function (d) {
-      if (!els.dialog) return;
-      var name = d.name || 'MARA SOLIS';
-      $('sb-dlg-name').textContent = name + (d.role ? ' · ' + d.role : '');
-      $('sb-dlg-line').textContent = (d.lines && d.lines[0]) || d.line || '';
-      var por = $('sb-portrait');
-      if (d.portrait && (d.portrait.indexOf('data:') === 0 || d.portrait.indexOf('/') >= 0)) {
-        por.innerHTML = '<img src="' + d.portrait + '" style="width:100%;height:100%;border-radius:50%;object-fit:cover">';
-      } else por.textContent = name.charAt(0);
-      els.dialog.style.display = 'flex';
-    },
-    hideDialog: function () { if (els.dialog) els.dialog.style.display = 'none'; },
-    showMissionBrief: function (m) {
-      if (!els.brief) return;
-      els.brief.innerHTML = '<b style="color:#ffd23f;letter-spacing:2px;font-size:12px">NEW MISSION — ' + (m.contact || 'MARA SOLIS') + '</b><br><b style="font-size:18px">' + m.title + '</b><br><span style="font-size:13px;color:#cfe6ff">' + (m.objective || '') + '</span><br><span style="color:#39d353;font-size:14px">PAYOUT $' + (m.payout || 0).toLocaleString('en-US') + '</span>';
-      els.brief.style.display = 'block'; briefTimer = 6;
-      SB.hud.setObjective(m.objective || m.title);
-    },
-    showBusted: function () {
-      if (!els.big) return;
-      $('sb-big-title').textContent = 'BUSTED';
-      $('sb-big-sub').textContent = 'Solmar PD caught you — cash −10% · Woke up at St. Coral Hospital';
-      els.big.style.display = 'flex';
-      setTimeout(function () { if (els.big) els.big.style.display = 'none'; }, 4000);
-    },
-    showWasted: function () {
-      if (!els.big) return;
-      $('sb-big-title').textContent = 'WASTED';
-      $('sb-big-sub').textContent = 'You didn\'t make it — cash −10% · Woke up at St. Coral Hospital';
-      els.big.style.display = 'flex';
-      setTimeout(function () { if (els.big) els.big.style.display = 'none'; }, 4000);
-    }
+    init: init, update: update, toast: toast, setStaging: setStaging,
+    setObjective: setObjective, showBusted: showBusted, showWasted: showWasted,
+    showMissionBrief: showMissionBrief, drawMinimap: drawMinimap,
+    cash: cash, rep: rep, stars: stars, setPaused: setPaused,
+    isStaging: function () { return staging; }
   };
 })();
