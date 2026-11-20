@@ -1,126 +1,125 @@
+// shops.js — toko / safehouse / respray Solmar Bay. B4 r8, tulis segar.
+// Potong SB.player.cash (ledger r7); respray $200 hapus 1 bintang via
+// SB.police.setStars (fallback SB.state.heat).
 (function () {
   'use strict';
-  var SB = window.SB = window.SB || {};
-  var S = SB.state;
-  var ITEMS = {
+  var SB = window.SB;
+  var ov = null, listEl = null, curKind = 'weapons', openFlag = false;
+  function weapons() {
+    if (!SB.state.weapons) SB.state.weapons = {
+      fists: { ammo: Infinity }, pistol: { ammo: 12, reserve: 48 },
+      smg: { ammo: 32, reserve: 128 }, shotgun: { ammo: 6, reserve: 18 },
+      rifle: { ammo: 0, reserve: 0, locked: true }
+    };
+    return SB.state.weapons;
+  }
+  function setHealth(v) { if (typeof SB.setHealth === 'function') SB.setHealth(v); else SB.state.health = v; }
+  function setArmor(v) { if (typeof SB.setArmor === 'function') SB.setArmor(v); else SB.state.armor = v; }
+  var CATALOG = {
     weapons: [
-      { id: 'ammo-pistol', name: 'Pistol Ammo ×12', price: 100, desc: '12 rounds · 9mm' },
-      { id: 'ammo-smg', name: 'SMG Ammo ×32', price: 200, desc: '32 rounds · 9mm' },
-      { id: 'ammo-shotgun', name: 'Shotgun Shells ×6', price: 150, desc: '6 shells · 12ga' },
-      { id: 'rifle-unlock', name: 'RIFLE — unlock', price: 1500, desc: 'Unlocks the rifle + 30 rounds' }
+      { id: 'pistol-ammo', name: 'Pistol ammo ×24', price: 80, apply: function () { weapons().pistol.reserve += 24; } },
+      { id: 'smg-ammo', name: 'SMG ammo ×64', price: 120, apply: function () { weapons().smg.reserve += 64; } },
+      { id: 'shotgun-ammo', name: 'Shotgun shells ×12', price: 100, apply: function () { weapons().shotgun.reserve += 12; } },
+      { id: 'rifle', name: 'Unlock RIFLE', price: 1500, apply: function () { var w = weapons().rifle; w.locked = false; w.ammo = 30; w.reserve = 90; } }
     ],
     armor: [
-      { id: 'armor-vest', name: 'Kevlar Vest +50', price: 250, desc: 'Light body armor' },
-      { id: 'armor-full', name: 'Full Armor +100', price: 400, desc: 'Heavy plating, max protection' }
+      { id: 'armor-50', name: 'Armor vest +50', price: 150, apply: function () { setArmor(Math.min(100, (SB.state.armor || 0) + 50)); } },
+      { id: 'armor-full', name: 'Full armor 100', price: 250, apply: function () { setArmor(100); } }
     ],
     food: [
-      { id: 'food-snack', name: 'Street Snack +10 HP', price: 10, desc: 'Arepa from the market stall' },
-      { id: 'food-meal', name: 'Marina Meal +25 HP', price: 25, desc: 'Full plate at Tideline Cafe' }
+      { id: 'snack', name: 'Mercado snack +25 HP', price: 25, apply: function () { setHealth(Math.min(100, (SB.state.health == null ? 100 : SB.state.health) + 25)); } },
+      { id: 'meal', name: 'Cafe meal — full HP', price: 60, apply: function () { setHealth(100); } }
     ]
   };
-  var panel = null, curKind = 'weapons';
-  var RESPRAY_COLORS = [0xff2a7a, 0x00e5ff, 0xffd23f, 0x39d353, 0xff5a1f, 0x8a5cff];
-  function toast(m) { if (SB.hud && SB.hud.toast) SB.hud.toast(m); }
-  function money(n) { return '$' + n.toLocaleString('en-US'); }
-  function apply(item) {
-    if (item.id === 'rifle-unlock') {
-      if (!S.weapons.rifle.locked) return 'Rifle already owned';
-      S.weapons.rifle.locked = false; S.weapons.rifle.ammo = 30; S.weapons.rifle.reserve = 90;
-      return 'RIFLE unlocked — 30/90 rounds';
-    }
-    if (item.id === 'ammo-pistol') { S.weapons.pistol.reserve += 12; return 'Pistol ammo +12'; }
-    if (item.id === 'ammo-smg') { S.weapons.smg.reserve += 32; return 'SMG ammo +32'; }
-    if (item.id === 'ammo-shotgun') { S.weapons.shotgun.reserve += 6; return 'Shotgun shells +6'; }
-    if (item.id === 'armor-vest') { SB.setArmor(Math.min(100, S.armor + 50)); return 'Armor +50'; }
-    if (item.id === 'armor-full') { SB.setArmor(100); return 'Armor full'; }
-    if (item.id === 'food-snack') { SB.setHealth(Math.min(100, S.health + 10)); return 'Health +10'; }
-    if (item.id === 'food-meal') { SB.setHealth(Math.min(100, S.health + 25)); return 'Health +25'; }
-    return 'Bought ' + item.name;
+  function cash() {
+    if (SB.player && typeof SB.player.cash === 'number') return SB.player.cash;
+    return SB.state.cash || 0;
   }
-  function shopName() {
-    var shops = (SB.world.spawns && SB.world.spawns.shops) || [];
-    var p = SB.world.player;
-    if (!p || !p.pos || !shops.length) return 'SOLMAR SHOP';
-    var best = shops[0], bd = 1e18;
-    for (var i = 0; i < shops.length; i++) {
-      var d = (shops[i].x - p.pos.x) * (shops[i].x - p.pos.x) + (shops[i].z - p.pos.z) * (shops[i].z - p.pos.z);
-      if (d < bd) { bd = d; best = shops[i]; }
-    }
-    return best.name;
+  function pay(n) {
+    if (SB.player && typeof SB.player.cash === 'number') SB.player.cash -= n;
+    if (typeof SB.state.cash === 'number') SB.state.cash = Math.max(0, SB.state.cash - n);
   }
-  function buildPanel() {
-    panel = document.createElement('div');
-    panel.id = 'sb-shop';
-    panel.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:380px;max-width:92vw;background:rgba(8,10,18,.94);border:2px solid #ff2a7a;border-radius:10px;color:#fff;font-family:Arial,sans-serif;padding:16px;z-index:60;pointer-events:auto;display:none;box-shadow:0 8px 40px rgba(0,0,0,.6)';
-    document.body.appendChild(panel);
+  function build() {
+    if (ov) return;
+    ov = document.createElement('div');
+    ov.id = 'shopov'; ov.style.display = 'none';
+    var h = document.createElement('div');
+    h.id = 'shop-head'; h.textContent = 'SHOP';
+    ov.appendChild(h);
+    var tabs = document.createElement('div');
+    tabs.id = 'shop-tabs';
+    ['weapons', 'armor', 'food'].forEach(function (k) {
+      var b = document.createElement('button');
+      b.textContent = k.toUpperCase(); b.dataset.kind = k;
+      b.addEventListener('click', function () { open(k); });
+      tabs.appendChild(b);
+    });
+    var rp = document.createElement('button');
+    rp.textContent = 'RESPRAY $200 (−1★)';
+    rp.addEventListener('click', function () { respray(); });
+    tabs.appendChild(rp);
+    var sh = document.createElement('button');
+    sh.textContent = 'SAFEHOUSE (SAVE)';
+    sh.addEventListener('click', function () { safehouse(); });
+    tabs.appendChild(sh);
+    ov.appendChild(tabs);
+    listEl = document.createElement('div');
+    listEl.id = 'shop-list';
+    ov.appendChild(listEl);
+    var cl = document.createElement('button');
+    cl.id = 'shop-close'; cl.textContent = 'CLOSE [Esc]';
+    cl.addEventListener('click', close);
+    ov.appendChild(cl);
+    document.body.appendChild(ov);
   }
-  function renderPanel() {
-    var cats = curKind === 'all' ? ['weapons', 'armor', 'food'] : [curKind];
-    var h = '<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:17px;letter-spacing:1px">' + shopName() + '</b><button id="sb-shop-x" style="background:#ff2a7a;color:#fff;border:0;border-radius:4px;padding:4px 10px;cursor:pointer">✕</button></div>';
-    h += '<div style="color:#ffd23f;font-size:13px;margin:4px 0 10px">CASH ' + money(S.cash) + ' &nbsp;·&nbsp; <span style="color:#8affc1;cursor:pointer" data-cat="weapons">WEAPONS</span> · <span style="color:#8affc1;cursor:pointer" data-cat="armor">ARMOR</span> · <span style="color:#8affc1;cursor:pointer" data-cat="food">FOOD</span></div>';
-    for (var c = 0; c < cats.length; c++) {
-      var list = ITEMS[cats[c]];
-      h += '<div style="color:#9fb4d8;font-size:11px;letter-spacing:2px;margin:8px 0 4px">' + cats[c].toUpperCase() + '</div>';
-      for (var i = 0; i < list.length; i++) {
-        var it = list[i];
-        var owned = it.id === 'rifle-unlock' && !S.weapons.rifle.locked;
-        h += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #223"><span><b>' + it.name + '</b><br><span style="color:#9fb4d8;font-size:12px">' + it.desc + '</span></span><button data-buy="' + it.id + '" ' + (owned || S.cash < it.price ? 'disabled' : '') + ' style="background:' + (owned ? '#334' : '#ff2a7a') + ';color:#fff;border:0;border-radius:5px;padding:6px 10px;cursor:pointer;white-space:nowrap">' + (owned ? 'OWNED' : money(it.price)) + '</button></div>';
-      }
-    }
-    h += '<div style="color:#9fb4d8;font-size:12px;margin-top:10px">Respray $200 — new paint + lose 1 ★ · Safehouse saves your game.</div>';
-    panel.innerHTML = h;
-    panel.querySelector('#sb-shop-x').onclick = function () { SB.shops.close(); };
-    var tabs = panel.querySelectorAll('[data-cat]');
-    for (var t = 0; t < tabs.length; t++) tabs[t].onclick = function () { SB.shops.open(this.getAttribute('data-cat')); };
-    var btns = panel.querySelectorAll('[data-buy]');
-    for (var b = 0; b < btns.length; b++) btns[b].onclick = function () { SB.shops.buy(this.getAttribute('data-buy')); };
+  function open(kind) {
+    build();
+    curKind = CATALOG[kind] ? kind : 'weapons';
+    openFlag = true; ov.style.display = '';
+    var items = CATALOG[curKind], html = '';
+    items.forEach(function (it) {
+      var owned = it.id === 'rifle' && SB.state.weapons && SB.state.weapons.rifle && !SB.state.weapons.rifle.locked;
+      html += '<div class="shop-item"><span>' + it.name + '</span> <span>$' + it.price + '</span> ' +
+        '<button data-item="' + it.id + '"' + (owned ? ' disabled' : '') + '>' + (owned ? 'OWNED' : 'BUY') + '</button></div>';
+    });
+    html += '<div class="shop-cash">Cash: $' + cash().toLocaleString('en-US') + '</div>';
+    listEl.innerHTML = html;
+    var btns = listEl.querySelectorAll ? listEl.querySelectorAll('[data-item]') : [];
+    for (var i = 0; i < btns.length; i++) btns[i].addEventListener('click', function (ev) { buy(ev.target.dataset.item); });
+    if (SB.hud) SB.hud.toast('SHOP — ' + curKind.toUpperCase());
   }
-  SB.shops = {
-    ITEMS: ITEMS,
-    open: function (kind) {
-      curKind = ITEMS[kind] ? kind : 'all';
-      if (!panel) buildPanel();
-      renderPanel();
-      panel.style.display = 'block';
-      if (SB.setPaused) SB.setPaused(true);
-    },
-    close: function () {
-      if (panel) panel.style.display = 'none';
-      if (SB.setPaused) SB.setPaused(false);
-    },
-    isOpen: function () { return !!panel && panel.style.display !== 'none'; },
-    buy: function (itemId) {
-      var item = null;
-      var keys = Object.keys(ITEMS);
-      for (var k = 0; k < keys.length && !item; k++) for (var i = 0; i < ITEMS[keys[k]].length; i++) if (ITEMS[keys[k]][i].id === itemId) item = ITEMS[keys[k]][i];
-      if (!item) return false;
-      if (item.id === 'rifle-unlock' && !S.weapons.rifle.locked) { toast('Rifle already owned'); return false; }
-      if (S.cash < item.price) { toast('Not enough cash — need ' + money(item.price)); return false; }
-      SB.addCash(-item.price);
-      var msg = apply(item);
-      toast('✓ ' + msg + ' · −' + money(item.price));
-      if (SB.audio && SB.audio.pickup) SB.audio.pickup();
-      if (panel && panel.style.display !== 'none') renderPanel();
-      return true;
-    },
-    respray: function (color) {
-      if (!S.vehicle) { toast('No vehicle to respray'); return false; }
-      if (S.cash < 200) { toast('Respray costs $200'); return false; }
-      SB.addCash(-200);
-      var hex = color !== undefined ? color : RESPRAY_COLORS[SB.randInt(0, RESPRAY_COLORS.length - 1)];
-      var p = SB.world.player;
-      if (p && p.vehicle && p.vehicle.group) p.vehicle.group.traverse(function (o) { if (o.material && o.material.color && o.geometry && o.geometry.type === 'BoxGeometry') o.material.color.setHex(hex); });
-      if (S.wanted > 0) SB.setWanted(S.wanted - 1);
-      if (S.vehicle) S.vehicle.condition = 100;
-      toast('Respray done — fresh paint, −1 ★ wanted, condition 100%');
-      return true;
-    },
-    safehouse: function () {
-      SB.setHealth(100);
-      var ok = SB.save ? SB.save.save(0) : false;
-      if (SB.addRep) SB.addRep(5);
-      toast(ok ? 'Saved at Mara\'s Safehouse — health restored, outfit changed' : 'Safehouse rest — health restored (save failed)');
-      return ok;
-    }
-  };
+  function buy(itemId) {
+    var items = CATALOG[curKind] || [], it = null;
+    for (var i = 0; i < items.length; i++) if (items[i].id === itemId) it = items[i];
+    if (!it) return false;
+    if (cash() < it.price) { if (SB.hud) SB.hud.toast('Not enough cash — need $' + it.price); return false; }
+    pay(it.price);
+    try { it.apply(); } catch (e) {}
+    if (SB.audio) SB.audio.pickup();
+    if (SB.hud) SB.hud.toast('Bought: ' + it.name + ' (−$' + it.price + ')');
+    open(curKind);
+    return true;
+  }
+  function starsNow() {
+    if (SB.police && typeof SB.police.stars === 'function') { try { return SB.police.stars(); } catch (e) {} }
+    return SB.state.heat || 0;
+  }
+  function respray(color) {
+    if (cash() < 200) { if (SB.hud) SB.hud.toast('Respray needs $200'); return false; }
+    pay(200);
+    var n = Math.max(0, starsNow() - 1);
+    if (SB.police && typeof SB.police.setStars === 'function') SB.police.setStars(n);
+    else if (typeof SB.setWanted === 'function') SB.setWanted(n);
+    else SB.state.heat = n;
+    if (SB.hud) SB.hud.toast('Respray done — wanted −1★ (' + (color || 'neon pink') + ')');
+    return true;
+  }
+  function safehouse() {
+    if (SB.save) SB.save.save(0);
+    setHealth(100);
+    if (SB.hud) SB.hud.toast('Safehouse — game saved, HP restored');
+    return true;
+  }
+  function close() { openFlag = false; if (ov) ov.style.display = 'none'; }
+  SB.shops = { open: open, buy: buy, respray: respray, safehouse: safehouse, close: close, isOpen: function () { return openFlag; }, CATALOG: CATALOG };
 })();

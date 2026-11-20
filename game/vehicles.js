@@ -1,158 +1,121 @@
-(function () {
-  'use strict';
-
-  var SB = window.SB = window.SB || {};
-  var V = SB.vehicles = SB.vehicles || {};
-  var _spawned = false;
-
-  var NAMES = {
-    sport: 'VENTO STRADA', muscle: 'SOLMAR GT', sedan: 'PALMERA LX',
-    taxi: 'SOLMAR CAB', truck: 'BAYLINE HAULER', van: 'MERCADO VAN'
-  };
-  var SPECS = {
-    sport: { topSpeed: 55, accel: 14 },
-    muscle: { topSpeed: 48, accel: 12 },
-    sedan: { topSpeed: 42, accel: 10 },
-    taxi: { topSpeed: 42, accel: 10 },
-    truck: { topSpeed: 34, accel: 7 },
-    van: { topSpeed: 38, accel: 9 }
-  };
-  var PALETTE = [0xd83a3a, 0x3a6ad8, 0xd8d83a, 0x3ad83a, 0xff5a8a, 0xff8c42, 0xffffff, 0x2a2a2a, 0x7a3ad8];
-  V.SPECS = SPECS;
-
-  V.create = function (kind, x, z, heading, opts) {
-    opts = opts || {};
-    if (!NAMES[kind]) kind = 'sedan';
-    var spec = SPECS[kind];
-    var color = (opts.color !== undefined) ? opts.color
-      : PALETTE[Math.floor(SB.rng() * PALETTE.length)];
-    var group = SB.city.makeCarMesh(kind, color);
-    group.position.set(x, 0, z);
-    group.rotation.y = heading || 0;
-    SB.world.scene.add(group);
-    var v = {
-      id: 'veh-' + (SB.world.vehicles.length + 1),
-      name: opts.name || NAMES[kind], kind: kind,
-      condition: (opts.condition !== undefined ? opts.condition : 100),
-      group: group, pos: group.position, heading: heading || 0, speed: 0,
-      topSpeed: spec.topSpeed, accel: spec.accel, color: color,
-      taken: false, stalled: false
-    };
-    SB.world.vehicles.push(v);
-    return v;
-  };
-
-  V.spawnParked = function () {
-    if (_spawned) return SB.world.vehicles;
-    _spawned = true;
-    var list = (SB.world.spawns && SB.world.spawns.vehicles) || [];
-    for (var i = 0; i < list.length; i++) {
-      var s = list[i];
-      V.create(s.kind, s.x, s.z, s.heading, { name: s.name });
-    }
-    return SB.world.vehicles;
-  };
-
-  V.nearest = function (x, z, maxD) {
-    var best = null, bestD = maxD * maxD;
-    var list = SB.world.vehicles;
-    for (var i = 0; i < list.length; i++) {
-      var dx = list[i].pos.x - x, dz = list[i].pos.z - z;
-      var d2 = dx * dx + dz * dz;
-      if (d2 < bestD) { bestD = d2; best = list[i]; }
-    }
-    return best;
-  };
-
-  V.steal = function (v) {
-    if (!v) return null;
-    v.taken = true;
-    SB.addHeat(15);
-    SB.emit('vehicle-stolen', {
-      vehicle: { id: v.id, name: v.name, kind: v.kind }, heat: SB.state.heat
-    });
-    return v;
-  };
-
-  function gearFor(v) {
-    if (v.speed < -0.5) return 'R';
-    if (v.speed < 0.5) return 'N';
-    var f = Math.abs(v.speed) / v.topSpeed;
-    return 'G' + (f < 0.2 ? 1 : f < 0.4 ? 2 : f < 0.6 ? 3 : f < 0.8 ? 4 : 5);
-  }
-
-  V.update = function (dt) {
-    var p = SB.world.player;
-    if (!p || p.onFoot || !p.vehicle) return;
-    var v = p.vehicle;
-    if (v.condition <= 0) {
-      v.speed = 0;
-      if (!v.stalled) {
-        v.stalled = true;
-        SB.emit('vehicle-stalled', { vehicle: { id: v.id, name: v.name, kind: v.kind } });
-      }
-    } else {
-      var ax = SB.input.axis();
-      var brake = SB.input.isDown('Space');
-      if (ax.y > 0) v.speed += v.accel * dt;
-      else if (ax.y < 0) v.speed -= (v.speed > 0.5 ? 30 : 8) * dt;
-      v.speed -= v.speed * 0.12 * dt;
-      if (brake) v.speed -= v.speed * 2.5 * dt;
-      if (Math.abs(v.speed) < 0.05 && ax.y === 0) v.speed = 0;
-      if (v.speed > v.topSpeed) v.speed = v.topSpeed;
-      if (v.speed < -12) v.speed = -12;
-
-      var spdF = Math.max(-1, Math.min(1, v.speed / 10));
-      v.heading -= ax.x * 1.9 * spdF * (brake ? 1.5 : 1) * dt;
-      var f = SB.forwardOf(v.heading);
-      var nx = v.pos.x + f.x * v.speed * dt;
-      var nz = v.pos.z + f.z * v.speed * dt;
-      var hit = SB.isBlocked(nx, nz, 1.3);
-      if (!hit) {
-        var list = SB.world.vehicles;
-        for (var i = 0; i < list.length; i++) {
-          var o = list[i];
-          if (o === v) continue;
-          var ox = nx - o.pos.x, oz = nz - o.pos.z;
-          if (ox * ox + oz * oz < 3.1 * 3.1) { hit = true; break; }
-        }
-      }
-      if (hit) {
-        var impact = Math.abs(v.speed);
-        if (impact > 4) {
-          v.condition = Math.max(0, v.condition - Math.round(impact * 0.5));
-          SB.emit('vehicle-crash', {
-            vehicle: { id: v.id, name: v.name, kind: v.kind },
-            impact: Math.round(impact * 10) / 10
-          });
-        }
-        v.speed *= -0.25;
-      } else {
-        v.pos.x = nx;
-        v.pos.z = nz;
-
-        if (v._bumpCd === undefined) v._bumpCd = 0;
-        v._bumpCd -= dt;
-        var tr = SB.world.traffic;
-        for (var j = 0; j < tr.length; j++) {
-          var t = tr[j];
-          var tx = v.pos.x - t.group.position.x, tz = v.pos.z - t.group.position.z;
-          if (tx * tx + tz * tz < 3.2 * 3.2 && v._bumpCd <= 0) {
-            t.s += (t.dir > 0 ? 1 : -1) * 2.5;
-            v.speed *= 0.7;
-            if (v.condition > 0) v.condition = Math.max(0, v.condition - 1);
-            v._bumpCd = 0.5;
-          }
-        }
-      }
-    }
-    v.group.position.set(v.pos.x, 0, v.pos.z);
-    v.group.rotation.y = v.heading;
-    p.pos.set(v.pos.x, 0, v.pos.z);
-    p.heading = v.heading;
-    SB.state.speedKmh = Math.round(Math.abs(v.speed) * 3.6 * 10) / 10;
-    SB.state.gear = gearFor(v);
-    SB.state.vehicle = { id: v.id, name: v.name, kind: v.kind, condition: Math.round(v.condition) };
-  };
-
-})();
+// vehicles.js — Solmar Bay r8 (B2): player cars + ambient traffic. Fresh write.
+// Speeds are m/s internally; HUD shows km/h (x3.6). Top speeds are per kind.
+var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
+var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
+var KINDS={sport:{name:'VENTO STRADA',color:0xff4fa3,top:55,acc:16},
+muscle:{name:'SOLMAR GT',color:0xff6b35,top:48,acc:14},
+sedan:{name:'PALMERA LX',color:0x3fa7d6,top:42,acc:12},
+taxi:{name:'SOLMAR CAB',color:0xffc300,top:42,acc:12},
+truck:{name:'BAYLINE HAULER',color:0x8a8f98,top:32,acc:9},
+van:{name:'MERCADO VAN',color:0x7fb069,top:36,acc:10}};
+function _clamp(v,a,b){return v<a?a:v>b?b:v;}
+function _box(w,h,d,c,x,y,z){var m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),
+new THREE.MeshStandardMaterial({color:c,roughness:.8}));m.position.set(x,y,z);return m;}
+function mkCar(kind,color){var g=new THREE.Group();
+var c=color!==undefined?color:(KINDS[kind]||KINDS.sedan).color;
+g.add(_box(2,.65,4.2,c,0,.68,0));
+g.add(_box(1.7,.55,2,0x1a202c,0,1.28,.15));
+var wg=new THREE.CylinderGeometry(.36,.36,.3,10);
+var wm=new THREE.MeshStandardMaterial({color:0x111111,roughness:.95});
+[[-.95,1.35],[.95,1.35],[-.95,-1.35],[.95,-1.35]].forEach(function(p){
+var w=new THREE.Mesh(wg,wm);w.rotation.z=Math.PI/2;w.position.set(p[0],.36,p[1]);g.add(w);});
+g.add(_box(.35,.15,.1,0xfff2b0,-.6,.7,-2.12));g.add(_box(.35,.15,.1,0xfff2b0,.6,.7,-2.12));
+g.add(_box(.35,.15,.1,0xff2222,-.6,.7,2.12));g.add(_box(.35,.15,.1,0xff2222,.6,.7,2.12));
+g.userData.kind=kind;return g;}
+SB.vehicles=SB.vehicles||{};
+var V=SB.vehicles;
+V.list=V.list||[];V.traffic=V.traffic||[];V.active=null;V.pinkCar=null;
+V._owned={};V._vid=0;
+V.makeCarMesh=mkCar;
+V.create=function(kind,x,z,heading,opts){opts=opts||{};
+var k=KINDS[kind]||KINDS.sedan;
+var mesh=mkCar(kind,opts.color!==undefined?opts.color:k.color);
+mesh.position.set(x,0,z);mesh.rotation.y=heading||0;
+if(SB.engine&&SB.engine.scene)SB.engine.scene.add(mesh);
+var v={id:'v'+(++V._vid),mesh:mesh,group:mesh,name:opts.name||k.name,kind:kind,
+color:opts.color!==undefined?opts.color:k.color,cond:100,parked:!!opts.parked,
+pos:mesh.position,heading:heading||0,speed:0,top:k.top,acc:k.acc};
+V.list.push(v);return v;};
+// Parked cars around the map. Spots[0] is the pink player car — owned from the
+// start, so entering it never counts as theft (cover heat stays at 4).
+V.spawnParked=function(){if(SB._b2parked)return;SB._b2parked=true;
+var spots=[['sport',8,60,0],['sedan',-8,-40,Math.PI],['taxi',108,150,Math.PI/2],
+['muscle',-92,-150,0],['van',250,60,-Math.PI/2],['truck',350,450,Math.PI],
+['sport',-450,100,Math.PI/2],['sedan',50,-350,Math.PI],['muscle',-250,-250,0],
+['taxi',150,250,-Math.PI/2]];
+for(var i=0;i<spots.length;i++){var s=spots[i];
+var v=V.create(s[0],s[1],s[2],s[3],{parked:true});
+if(i===0){V.pinkCar=v;V._owned[v.id]=1;}}
+if(!V.pinkCar&&V.list.length)V.pinkCar=V.list[0];};
+V.spawnTraffic=function(n){n=n||24;if(V.traffic.length>=n)return;
+var roads=SB.city&&SB.city.roads;
+var colors=[0xff4fa3,0x3fa7d6,0xffc300,0x7fb069,0xe8e8e8,0x222831,0xff6b35];
+var kinds=['sedan','sedan','taxi','muscle','van','sport','truck'];
+while(V.traffic.length<n){var rd=null;
+if(roads&&roads.length)rd=SB.randPick?SB.randPick(roads):roads[V.traffic.length%roads.length];
+if(!rd)rd={x0:-400,z0:0,x1:400,z1:0};
+var len=Math.sqrt((rd.x1-rd.x0)*(rd.x1-rd.x0)+(rd.z1-rd.z0)*(rd.z1-rd.z0))||1;
+var s=SB.rand?SB.rand():0.5;
+var kind=SB.randPick?SB.randPick(kinds):kinds[V.traffic.length%kinds.length];
+var col=SB.randPick?SB.randPick(colors):colors[V.traffic.length%colors.length];
+var mesh=mkCar(kind,col);if(SB.engine&&SB.engine.scene)SB.engine.scene.add(mesh);
+var dir=SB.rand?SB.rand()<0.5?1:-1:1;
+V.traffic.push({mesh:mesh,road:rd,s:s,dir:dir,len:len,
+speed:8+(SB.rand?SB.rand()*6:3),lane:V.traffic.length%2?2.5:-2.5});}};
+V._trafficTick=function(dt){dt=_clamp(dt||0,0,.05);
+for(var i=0;i<V.traffic.length;i++){var t=V.traffic[i];
+t.s+=t.dir*t.speed*dt/t.len;if(t.s>1){t.s=1;t.dir=-1;}if(t.s<0){t.s=0;t.dir=1;}
+var r=t.road,dx=r.x1-r.x0,dz=r.z1-r.z0,L=t.len||1;
+var ux=dx/L,uz=dz/L,px=r.x0+ux*t.s*L+(-uz)*t.lane,pz=r.z0+uz*t.s*L+ux*t.lane;
+t.mesh.position.set(px,0,pz);
+var hx=ux*t.dir,hz=uz*t.dir;t.mesh.rotation.y=Math.atan2(-hx,-hz);}};
+function _gear(kmh,sp){if(sp<-0.5)return'R';if(kmh<1)return'N';
+if(kmh<40)return'G1';if(kmh<80)return'G2';if(kmh<120)return'G3';if(kmh<160)return'G4';return'G5';}
+V.update=function(dt){var v=V.active;if(!v)return;dt=_clamp(dt||0,0,.05);
+var ax={x:0,y:0};if(SB.input&&typeof SB.input.axis==='function')ax=SB.input.axis();
+else{var k=SB.input?SB.input.keys:{};if(k.KeyD||k.ArrowRight)ax.x+=1;
+if(k.KeyA||k.ArrowLeft)ax.x-=1;if(k.KeyW||k.ArrowUp)ax.y+=1;if(k.KeyS||k.ArrowDown)ax.y-=1;}
+var hand=!!(SB.input&&SB.input.keys&&(SB.input.keys.Space));
+var nitro=!!(SB.input&&SB.input.keys&&(SB.input.keys.ShiftLeft||SB.input.keys.ShiftRight));
+var sp0=v.speed,top=v.top*(nitro?1.15:1);
+if(v.cond<=0){v.speed*=Math.max(0,1-2*dt);}
+else if(ax.y>0)v.speed+=v.acc*(nitro?1.6:1)*ax.y*dt;
+else if(ax.y<0){if(v.speed>0.5)v.speed-=22*dt;else v.speed+=v.acc*0.6*ax.y*dt;}
+else{v.speed-=v.speed*0.25*dt;if(Math.abs(v.speed)<0.4)v.speed=0;}
+if(hand)v.speed*=Math.max(0,1-3*dt);
+if(v.speed>top)v.speed=top;if(v.speed<-10)v.speed=-10;
+var sf=_clamp(Math.abs(v.speed)/10,0,1)*(v.speed<0?-1:1);
+v.heading-=ax.x*2*(hand?1.5:1)*sf*dt;
+var fx=-Math.sin(v.heading),fz=-Math.cos(v.heading);
+var nx=v.pos.x+fx*v.speed*dt,nz=v.pos.z+fz*v.speed*dt;
+if(SB._blocked&&SB._blocked(nx,nz)){
+var hard=Math.abs(sp0)>14;
+v.speed*=-0.3;v.cond=Math.max(0,v.cond-3);
+if(hard&&SB.player&&SB.player.damage)SB.player.damage(6);}
+else{v.pos.x=nx;v.pos.z=nz;
+var c=SB._clampPos?SB._clampPos(v.pos.x,v.pos.z):{x:v.pos.x,z:v.pos.z};
+v.pos.x=c.x;v.pos.z=c.z;}
+for(var i=0;i<V.traffic.length;i++){var t=V.traffic[i],p=t.mesh.position;
+var ddx=p.x-v.pos.x,ddz=p.z-v.pos.z,d2=ddx*ddx+ddz*ddz;
+if(d2<9&&d2>0.01){var d=Math.sqrt(d2);p.x+=ddx/d*1.5;p.z+=ddz/d*1.5;
+v.speed*=0.85;v.cond=Math.max(0,v.cond-1);}}
+v.mesh.position.set(v.pos.x,0,v.pos.z);v.mesh.rotation.y=v.heading;
+var kmh=Math.abs(v.speed)*3.6;
+SB.state.speedKmh=Math.round(kmh*10)/10;SB.state.gear=_gear(kmh,v.speed);
+SB.state.vehicleName=v.name;SB.state.vehicleCond=Math.round(v.cond);
+SB.state.vehicleStatus=v.cond<70?'DENTED':'OK';};
+// Staging helper: cover MUST call setSpeedKmh(151) AFTER the step loop so the
+// HUD shows 151 km/h. Sets the active car's speed too (151/3.6 m/s).
+V.setSpeedKmh=function(kmh){kmh=+kmh||0;SB.state.speedKmh=kmh;
+var v=V.active;if(v){v.speed=kmh/3.6;SB.state.gear=_gear(kmh,v.speed);
+SB.state.vehicleName=v.name;SB.state.vehicleCond=Math.round(v.cond);
+SB.state.vehicleStatus=v.cond<70?'DENTED':'OK';}
+else SB.state.gear=_gear(kmh,kmh/3.6);
+return kmh;};
+V.steal=function(v){if(!v)return false;
+if(SB.police&&SB.police.setStars)SB.police.setStars(Math.min(5,SB.police.stars()+1));
+else SB.state.heat=Math.min(5,(SB.state.heat|0)+1);return true;};
+V.nearest=function(x,z,maxD){var best=null,bd=maxD||4.5;
+for(var i=0;i<V.list.length;i++){var v=V.list[i];
+var dx=v.pos.x-x,dz=v.pos.z-z,d=Math.sqrt(dx*dx+dz*dz);
+if(d<bd){bd=d;best=v;}}return best;};

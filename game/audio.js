@@ -1,118 +1,98 @@
+// audio.js — suara prosedural WebAudio, tanpa file. B4 r8, tulis segar.
 (function () {
   'use strict';
-  var SB = window.SB = window.SB || {};
-  var ctx = null, master = null, musicGain = null, engOsc = null, engGain = null,
-    sirOsc = null, sirGain = null, sirLfo = null, schedTimer = 0, step = 0, nextT = 0,
-    station = 0, playing = true;
-
-  var BASS = [
-    [0, 0, 12, 0, 3, 0, 10, 7],
-    [0, 0, 7, 0, 5, 7, 10, 12],
-    [0, 12, 0, 7, 0, 10, 12, 15]
-  ];
-  var LEAD = [0, -1, 12, -1, 7, -1, 10, -1, 12, -1, 7, -1, 15, -1, 12, -1];
-  function midi(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+  var SB = window.SB;
+  var ctx = null, master = null, engOsc = null, engGain = null, sirOsc = null, sirLfo = null, sirGain = null;
+  var seqTimer = 0, seqStep = 0, station = -1, muted = false;
+  var BASS = [[0, 0, 7, 0, 10, 0, 7, 5], [0, 3, 5, 7, 5, 3, 0, -2], [0, 0, 12, 0, 10, 7, 5, 7]];
+  var BPM = [88, 100, 116];
+  function rng99() {
+    if (typeof SB.rng === 'function') { try { return SB.rng(99); } catch (e) {} }
+    var s = 99;
+    return function () { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  }
+  function init() {
+    if (ctx) return true;
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      ctx = new AC();
+      master = ctx.createGain(); master.gain.value = muted ? 0 : 0.35;
+      master.connect(ctx.destination);
+      return true;
+    } catch (e) { return false; }
+  }
   function ensure() {
-    if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return true; }
-    var AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return false;
-    try { ctx = new AC(); } catch (e) { return false; }
-    master = ctx.createGain(); master.gain.value = 0.5; master.connect(ctx.destination);
-    musicGain = ctx.createGain(); musicGain.gain.value = playing ? 0.32 : 0; musicGain.connect(master);
-    return true;
+    if (!ctx) init();
+    if (ctx && ctx.state === 'suspended') { try { ctx.resume(); } catch (e) {} }
+    return !!ctx;
   }
-  function note(midiN, t, dur, wave, gain, dest) {
+  function tone(freq, dur, type, vol, when) {
+    if (!ensure()) return;
+    var t = ctx.currentTime + (when || 0);
     var o = ctx.createOscillator(), g = ctx.createGain();
-    o.type = wave; o.frequency.value = midi(midiN);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g); g.connect(dest || musicGain);
-    o.start(t); o.stop(t + dur + 0.05);
+    o.type = type || 'sine'; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol || 0.2, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t + dur + 0.02);
   }
-  function scheduler() {
-    if (!ctx || !playing) return;
-    var st = SB.radio ? SB.radio.stationDef(station) : null;
-    if (!st) return;
-    var spb = 60 / st.bpm / 2;
-    while (nextT < ctx.currentTime + 0.3) {
-      var bar = Math.floor(step / 8) % 2;
-      var b = BASS[station][step % 8];
-      note(st.root + b, nextT, spb * 0.9, st.wave, 0.5);
-      var l = LEAD[step % 16];
-      if (l >= 0 && step % 4 === 0) note(st.root + 24 + l, nextT, spb * 1.8, 'sine', 0.12);
-      if (step % 8 === 4) note(st.root + 36, nextT, 0.05, 'square', 0.05);
-      step++; nextT += spb;
-      if (bar === 1 && step % 8 === 0) step += 0;
+  function noiseBuf() {
+    var len = 2205, buf = ctx.createBuffer(1, len, 44100), d = buf.getChannelData(0);
+    var rng = rng99();
+    for (var i = 0; i < len; i++) d[i] = (rng() * 2 - 1) * (1 - i / len);
+    return buf;
+  }
+  function shot() {
+    if (!ensure()) return;
+    var src = ctx.createBufferSource(); src.buffer = noiseBuf();
+    var g = ctx.createGain(); g.gain.value = 0.5;
+    var f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 900;
+    src.connect(f); f.connect(g); g.connect(master); src.start();
+    tone(160, 0.08, 'square', 0.15);
+  }
+  function pickup() { tone(660, 0.09, 'sine', 0.2); tone(990, 0.12, 'sine', 0.2, 0.09); }
+  function engine(sp) {
+    if (!ensure()) return;
+    sp = Math.max(0, sp || 0);
+    if (!engOsc) {
+      engOsc = ctx.createOscillator(); engOsc.type = 'sawtooth';
+      engGain = ctx.createGain(); engGain.gain.value = 0;
+      var f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700;
+      engOsc.connect(f); f.connect(engGain); engGain.connect(master);
+      engOsc.start();
+    }
+    engOsc.frequency.value = 42 + sp * 1.1;
+    engGain.gain.value = sp > 1 ? 0.05 + Math.min(0.08, sp / 2000) : 0;
+  }
+  function siren(on) {
+    if (!ensure()) return;
+    if (on && !sirOsc) {
+      sirOsc = ctx.createOscillator(); sirOsc.type = 'sine'; sirOsc.frequency.value = 800;
+      sirLfo = ctx.createOscillator(); sirLfo.type = 'square'; sirLfo.frequency.value = 0.8;
+      var lg = ctx.createGain(); lg.gain.value = 220;
+      sirLfo.connect(lg); lg.connect(sirOsc.frequency);
+      sirGain = ctx.createGain(); sirGain.gain.value = 0.06;
+      sirOsc.connect(sirGain); sirGain.connect(master);
+      sirOsc.start(); sirLfo.start();
+    } else if (!on && sirOsc) {
+      try { sirOsc.stop(); sirLfo.stop(); } catch (e) {}
+      sirOsc = null; sirLfo = null; sirGain = null;
     }
   }
-  SB.audio = {
-    init: function () {
-      if (SB.audio._inited) return;
-      SB.audio._inited = true;
-      var go = function () { if (ensure() && ctx.state === 'suspended') ctx.resume(); };
-      window.addEventListener('pointerdown', go);
-      window.addEventListener('keydown', go);
-      go();
-    },
-    ready: function () { return !!ctx; },
-    engine: function (speedKmh) {
-      if (!ensure()) return;
-      if (!engOsc) {
-        engOsc = ctx.createOscillator(); engGain = ctx.createGain();
-        engOsc.type = 'sawtooth'; engOsc.frequency.value = 55;
-        engGain.gain.value = 0; engOsc.connect(engGain); engGain.connect(master); engOsc.start();
-      }
-      var sp = speedKmh || 0;
-      engOsc.frequency.setTargetAtTime(45 + sp * 1.1, ctx.currentTime, 0.1);
-      engGain.gain.setTargetAtTime(sp > 1 ? 0.035 : 0.012, ctx.currentTime, 0.1);
-    },
-    siren: function (on) {
-      if (!ensure()) return;
-      if (on && !sirOsc) {
-        sirOsc = ctx.createOscillator(); sirGain = ctx.createGain(); sirLfo = ctx.createOscillator();
-        var lg = ctx.createGain(); lg.gain.value = 180;
-        sirOsc.type = 'sine'; sirOsc.frequency.value = 750;
-        sirLfo.type = 'sine'; sirLfo.frequency.value = 0.9;
-        sirLfo.connect(lg); lg.connect(sirOsc.frequency);
-        sirGain.gain.value = 0.05;
-        sirOsc.connect(sirGain); sirGain.connect(master);
-        sirOsc.start(); sirLfo.start();
-      } else if (!on && sirOsc) {
-        try { sirOsc.stop(); sirLfo.stop(); } catch (e) {}
-        sirOsc = null; sirLfo = null; sirGain = null;
-      }
-    },
-    shot: function () {
-      if (!ensure()) return;
-      var len = Math.floor(ctx.sampleRate * 0.12), buf = ctx.createBuffer(1, len, ctx.sampleRate),
-        d = buf.getChannelData(0);
-      for (var i = 0; i < len; i++) d[i] = (SB.rng() * 2 - 1) * (1 - i / len);
-      var src = ctx.createBufferSource(); src.buffer = buf;
-      var f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1800;
-      var g = ctx.createGain(); g.gain.value = 0.4;
-      src.connect(f); f.connect(g); g.connect(master); src.start();
-    },
-    pickup: function () {
-      if (!ensure()) return;
-      var t = ctx.currentTime;
-      note(81, t, 0.12, 'sine', 0.3, master);
-      note(88, t + 0.09, 0.18, 'sine', 0.3, master);
-    },
-    setStation: function (i) {
-      station = ((i || 0) % 3 + 3) % 3;
-      step = 0;
-      if (!ensure()) return;
-      if (!schedTimer) {
-        nextT = ctx.currentTime + 0.05;
-        schedTimer = setInterval(scheduler, 120);
-      }
-      if (musicGain) musicGain.gain.value = playing ? 0.32 : 0;
-    },
-    setPlaying: function (b) {
-      playing = !!b;
-      if (musicGain) musicGain.gain.value = playing ? 0.32 : 0;
-      if (playing && ctx && !schedTimer) SB.audio.setStation(station);
-    }
-  };
+  function seqTick() {
+    if (station < 0 || !ctx) return;
+    var pat = BASS[station], n = pat[seqStep % pat.length];
+    tone(110 * Math.pow(2, n / 12), 0.22, station === 2 ? 'square' : 'triangle', 0.16);
+    if (seqStep % 2 === 0) tone(220 * Math.pow(2, n / 12), 0.1, 'sine', 0.05);
+    seqStep++;
+  }
+  function setStation(i) {
+    station = i;
+    if (seqTimer) { clearInterval(seqTimer); seqTimer = 0; }
+    seqStep = 0;
+    if (i >= 0 && ensure()) setTimeout(function () { seqTimer = setInterval(seqTick, Math.round(60000 / BPM[i] / 2)); }, 0);
+  }
+  function setMuted(m) { muted = !!m; if (master) master.gain.value = muted ? 0 : 0.35; }
+  SB.audio = { init: init, engine: engine, siren: siren, shot: shot, pickup: pickup, setStation: setStation, setMuted: setMuted, isMuted: function () { return muted; } };
 })();

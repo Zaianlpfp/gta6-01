@@ -1,44 +1,27 @@
+// radio.js — 3 stasiun Solmar Bay (API.md r7 §10). B4 r8, tulis segar.
 (function () {
   'use strict';
-  var SB = window.SB = window.SB || {};
-  var S = SB.state;
+  var SB = window.SB;
   var STATIONS = [
-    { name: 'WAVE 88.1', genre: 'SUNSET SYNTH', bpm: 96, wave: 'sawtooth', root: 45,
-      tracks: ['Neon Drive — Pink Horizon', 'Palm Static — Coral Ghosts', 'Midnight Causeway — Lumen Kids'] },
-    { name: 'RADIO SOL 101.9', genre: 'LATIN POP', bpm: 104, wave: 'triangle', root: 50,
-      tracks: ['Sol de Medianoche — Marisol', 'Calle Ocho — Los Palmeros', 'Baila Solmar — Luna Rey'] },
-    { name: 'FLAMINGO FM 88.1', genre: 'FUNK / DISCO', bpm: 116, wave: 'square', root: 41,
-      tracks: ['Disco Bay — The Flamingos', 'Night Swim — Velvet Tide', 'Pink Cadillac — The Flamingos'] }
+    { name: 'WAVE 88.1', genre: 'sunset synth', bpm: 88, tracks: ['Neon Drive — Pink Horizon', 'Palm Static — Coral Ghosts', 'Sunset Run — Vega Bay'] },
+    { name: 'SOL 101.9', genre: 'latin pop', bpm: 100, tracks: ['Sol de Medianoche — Marisol', 'Calle Ocho — Los Palmeros', 'Brisa del Mar — Solmar'] },
+    { name: 'BAY 96.5', genre: 'funk/disco', bpm: 116, tracks: ['Disco Bay — The Flamingos', 'Night Swim — Velvet Tide', 'Pink Flamingo — DJ Palma'] }
   ];
-  var trackIdx = 0;
+  var idx = 0, track = 0, playing = true;
   function apply() {
-    var st = STATIONS[S.radio.station];
-    S.radio.name = st.name;
-    S.radio.track = st.tracks[trackIdx % st.tracks.length];
-    if (SB.audio && SB.audio.setStation) SB.audio.setStation(S.radio.station);
-    if (SB.hud && SB.hud.toast) SB.hud.toast('♪ ' + st.name + ' · ' + S.radio.track);
+    var s = STATIONS[idx];
+    SB.state.radio = { station: idx, name: s.name, track: s.tracks[track], playing: playing };
+    if (SB.audio && typeof SB.audio.setStation === 'function') { try { SB.audio.setStation(playing ? idx : -1); } catch (e) {} }
+    if (typeof SB.emit === 'function') SB.emit('radio', SB.state.radio);
   }
-  SB.radio = {
-    STATIONS: STATIONS,
-    play: function (i) {
-      i = ((Math.round(i) || 0) % STATIONS.length + STATIONS.length) % STATIONS.length;
-      S.radio.station = i; trackIdx = 0; S.radio.playing = true; apply();
-    },
-    next: function () { SB.radio.play(S.radio.station + 1); },
-    prev: function () { SB.radio.play(S.radio.station - 1); },
-    nextTrack: function () { trackIdx++; apply(); },
-    prevTrack: function () { trackIdx = Math.max(0, trackIdx - 1); apply(); },
-    toggle: function () {
-      S.radio.playing = !S.radio.playing;
-      if (SB.audio && SB.audio.setPlaying) SB.audio.setPlaying(S.radio.playing);
-      else if (S.radio.playing) SB.radio.play(S.radio.station);
-    },
-    current: function () { return { station: S.radio.station, name: S.radio.name, track: S.radio.track, playing: S.radio.playing }; },
-    stationDef: function (i) { return STATIONS[i || 0]; }
-  };
-  window.addEventListener('keydown', function (e) {
-    if (!S.started || S.paused) return;
-    if (e.code === 'KeyQ') SB.radio.next();
-    else if (e.code === 'KeyR') SB.radio.prev();
-  });
+  function play(i) { idx = ((i % 3) + 3) % 3; track = 0; playing = true; apply(); return current(); }
+  function next() { return play(idx + 1); }
+  function prev() { return play(idx - 1); }
+  function nextTrack() { track = (track + 1) % STATIONS[idx].tracks.length; apply(); return current(); }
+  function toggle() { playing = !playing; apply(); return current(); }
+  function current() {
+    var s = STATIONS[idx];
+    return { station: idx, name: s.name, track: s.tracks[track], playing: playing, bpm: s.bpm, genre: s.genre };
+  }
+  SB.radio = { STATIONS: STATIONS, stations: STATIONS, play: play, next: next, prev: prev, nextTrack: nextTrack, toggle: toggle, current: current };
 })();
