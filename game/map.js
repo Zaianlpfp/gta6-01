@@ -1,4 +1,4 @@
-// map.js — peta kota penuh Solmar Bay (M). B4 r11, tulis segar dari tree r10.
+// map.js — peta kota penuh Solmar Bay (M). B4 r12, tulis segar dari tree r11.
 // Batas peta dihitung dari distrik; GPS baca target dari markerPos B3 +
 // objektif dari S.mission (bukan hanya M.active).
 (function () {

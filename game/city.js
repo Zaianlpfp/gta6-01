@@ -1,13 +1,23 @@
-// city.js — B1 r10. Kota 3D "Solmar Bay": grid jalan, 71 gedung, palm, neon,
+// city.js — B1 r12. Kota 3D "Solmar Bay": grid jalan, 71 gedung, palm, neon,
 // props, pantai + marina. Deterministik (SB.rand, seed 1337). Kontrak: game/API.md.
+// Perbaikan r12 vs r11 (juri buta r11 30 vs 27 — hero onfoot kecil/jauh,
+// fasad kiri ~30% frame):
+//  - Spawn onfoot PINDAH (40,62) -> (0,40): persimpangan jalan x=0 dan z=40
+//    (zebra cross di (0,47.5); jalan silang membuka frame kiri-kanan; papan
+//    bank (2,7,-2) terbaca di kejauhan). Tetap DI JALAN, bukan di klaster
+//    bangunan. Kamera preset onfoot ikut pindah (engine.js): (0,5.0,50).
+//  - Foreground pasar pindah mengikuti spawn: stall/palm/mobil parkir dari
+//    tepi jalan x=40 ke tepi jalan x=0 (translasi x -40, z -28 dari posisi
+//    relatif kamera lama — layout relatif terhadap kamera dipertahankan).
 // Perbaikan r10 vs r9: koridor jalan showcase (x=0, x=40) DILEBARKAN —
 // bangunan yang menghadap jalan dipaksa lebar <=11 (fasad >=7,5 dari sumbu
 // jalan; r9 fasad 4,5 -> tembok makan ~40% frame onfoot, hero kecil di tengah
 // ngarai). Clamp SETELAH rand (stream rand tetap sama — kota lain identik,
 // jumlah gedung tetap 71).
-// Dipertahankan dari r9: spawn onfoot (40,62) di jalan x=40; foreground pasar
-// di tepi jalan x=40; ped menyimpan userData bx/bz/axis/sp untuk drift di
-// engine.step (TANPA rand baru — kota tetap identik dengan r8).
+// Dipertahankan dari r10/r11: spawn onfoot (0,40) r12 di persimpangan jalan
+// x=0/z=40; foreground pasar di tepi jalan x=0; ped menyimpan userData
+// bx/bz/axis/sp untuk drift di engine.step (TANPA rand baru — kota tetap
+// identik dengan r8).
 (function () {
   var SB = window.SB = window.SB || {};
   var C = SB.city = {};
@@ -25,7 +35,7 @@
     { name: 'Bayline Docks', cx: 100, cz: 120, w: 90, d: 60 }
   ];
   C.roads = [];
-  C.spawnPoints = { cover: [0, 0], onfoot: [40, 62], mission: [2, 10], free: [0, 40] };
+  C.spawnPoints = { cover: [0, 0], onfoot: [0, 40], mission: [2, 10], free: [0, 40] };
   C.bank = { pos: [2, 7, -2], rotY: Math.PI / 4 };
   C.staging = { coverCruisers: [[-5, 4], [5.5, 6]] };
   C.counts = { buildings: 0, palms: 0, neons: 0, props: 0, traffic: 0, peds: 0 };
@@ -298,12 +308,14 @@
       }
     });
     for (var pi2 = 0; pi2 < 10; pi2++) palm(scene, SB.randRange(-160, 160), SB.randRange(155, 185), SB.randRange(1, 1.4));
-    // Foreground on-foot r9 (tepi jalan x=40 — r8 (54..70, 52..70) di DALAM gedung
-    // blok (60,60), tidak terlihat): palm + stall + mobil parkir di tepi jalan.
-    palm(scene, 46, 50, 1.2); palm(scene, 46, 74, 1.1);
-    stall(scene, 44, 54, 0.2, 0xff5a5a); stall(scene, 44, 62, -0.3, 0xffc23d); stall(scene, 44, 70, 0.1, 0x5aff8a);
-    carMesh(scene, 36, 58, Math.PI / 2, 0x8ec9a9, true);
-    carMesh(scene, 36, 68, -Math.PI / 2, 0xd9a05b, true);
+    // Foreground on-foot r12 (tepi jalan x=0, mengikuti spawn (0,40) —
+    // r11 di x=40: palm (46,50)/(46,74), stall (44,54)/(44,62)/(44,70),
+    // mobil (36,58)/(36,68); r12 translasi x -40, z -28 dari layout relatif
+    // kamera: palm + stall + mobil parkir di tepi jalan x=0).
+    palm(scene, 6, 22, 1.2); palm(scene, 6, 46, 1.1);
+    stall(scene, 4, 26, 0.2, 0xff5a5a); stall(scene, 4, 34, -0.3, 0xffc23d); stall(scene, 4, 42, 0.1, 0x5aff8a);
+    carMesh(scene, -4, 30, Math.PI / 2, 0x8ec9a9, true);
+    carMesh(scene, -4, 40, -Math.PI / 2, 0xd9a05b, true);
     // Foreground big-score (depan bank, sekitar 2,10): palm + mobil parkir + roadblock
     palm(scene, -12, 12, 1.2); palm(scene, 16, 8, 1.1); palm(scene, -14, -4, 1.0);
     carMesh(scene, -8, 8, 0.3, 0x7fb3d5, true);

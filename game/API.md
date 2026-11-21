@@ -1,11 +1,26 @@
-# API.md — Kontrak antar modul "Solmar Bay" (gta6-01, rebuild r10)
+# API.md — Kontrak antar modul "Solmar Bay" (gta6-01, rebuild r12)
 
-Ditulis B1 di dalam recording r10, SEBELUM engine/city. B2–B5 membaca file ini
+Ditulis B1 di dalam recording r12, SEBELUM engine/city. B2–B5 membaca file ini
 (bukan source lama) sebagai satu-satunya kontrak. B5 memindahkan file ini ke repo
 root sebelum main.ts dijalankan (jangan masuk dossier).
 
+Perubahan r12 vs r11 (alasan: juri buta r11 30 vs 27 — hero onfoot kecil/jauh,
+fasad kiri ~30% frame; r12 mengejar margin, bukan sekadar perbaiki defect):
+- Spawn onfoot PINDAH (40,62) -> (0,40): persimpangan jalan x=0 dan z=40
+  (zebra cross di (0,47.5); jalan silang z=40 membuka frame kiri-kanan; papan
+  bank (2,7,-2) terbaca di kejauhan — kota tampil, bukan satu fasad).
+- Kamera preset onfoot lebih dekat: pos (0,5.0,50), look (0,1.3,38)
+  (r11: (40,6.0,78)/(40,1.2,56), jarak 16 — hero kecil). Jarak kini 10.
+- Foreground pasar pindah mengikuti spawn: stall/palm/mobil parkir dari tepi
+  jalan x=40 ke tepi jalan x=0 (translasi x -40, z -28 dari layout relatif
+  kamera lama). Koridor showcase TETAP lebar (fasad ≥7,5 dari sumbu jalan).
+- Semua fix r10/r11 dipertahankan: SB.registerUpdate terdefinisi + dipanggil
+  step(); DT_CAP 1,0 (clamp 0,05 JANGAN dikembalikan); advanceClock di step();
+  step() satu-satunya pemanggil SB.police.update; cone heli 0,10; peds drift
+  murni simTime; preset kamera di jalan.
+
 Perubahan r10 vs r9 (alasan: r9 seal mati restart VM 01:34 WIB; B2 r9 menemukan
-clamp dt 0,05 bikin sim live 10–20x lebih lambat dari wall time; B3 r9 menemukan
+clamp dt 0,05 bikin sim live 10-20x lebih lambat dari wall time; B3 r9 menemukan
 SB.registerUpdate tidak pernah didefinisikan; B4 r9 menemukan kamera onfoot
 masih memfilm tembok ~40% frame):
 - `SB.registerUpdate(fn)` DIDEFINISIKAN engine.js (lihat §3) — dipanggil
@@ -14,7 +29,7 @@ masih memfilm tembok ~40% frame):
 - dt LIVE LOOP = wall-clock, CAP 1,0 detik (BUKAN 0,05). Berlaku untuk loop
   internal engine (boot/start) DAN loop main.js. ⚠️ main.js:19 r9 masih
   `if (dt > 0.05) dt = 0.05;` — file itu milik B5, B5 r10 / integrator WAJIB
-  ubah ke 1,0, kalau tidak sim live tetap jalan 10–20x lambat di headless.
+  ubah ke 1,0, kalau tidak sim live tetap jalan 10-20x lambat di headless.
   Staging / stepping manual tetap pakai dt tetap 1/60 (deterministik).
 - Koridor jalan showcase (x=0, x=40) DILEBARKAN: bangunan yang menghadap
   jalan dipaksa lebar ≤11 (fasad ≥7,5 dari sumbu jalan; r9 fasad 4,5 → tembok
@@ -110,7 +125,7 @@ SB.state = {
 - `SB.engine.step(dt)` — SATU tick simulasi + render. Dipanggil main loop
   (atau staging) dengan `dt` wall-clock (live) atau `1/60` (staging manual).
   **dt LIVE = wall-clock, CAP 1,0 detik** (r10 — r9 clamp 0,05 bikin sim live
-  10–20x lebih lambat dari wall di headless ~1fps: 10 detik W-hold cuma majukan
+  10-20x lebih lambat dari wall di headless ~1fps: 10 detik W-hold cuma majukan
   simTime 0,47 detik). Modul B2 sudah menangani dt sampai 1,0 detik. JANGAN
   kembalikan clamp 0,05 di loop mana pun (engine boot/start DAN main.js).
   Isi, BERURUTAN: `simTime += dt`; majukan jam (`_clockMin += dt*clockRate`,
@@ -128,12 +143,13 @@ SB.state = {
     supaya mobil pink UTUH (tidak tertutup cruiser), `heat=4`, jam 17:24 SUNSET,
     heli + cone dalam frame, traffic + peds padat. Kamera TETAP r8:
     pos (10.5,5.4,19.5), look (-0.5,1.6,-4) — sightline ini bersih dari gedung.
-  - `onfoot`: hero jalan kaki di Old Mercado, `heat=2`, jam 18:05 SUNSET.
-    Spawn (40,62) DI JALAN x=40 (bukan (60,62) — itu di dalam footprint gedung
-    blok (60,60)). Kamera DI JALAN yang sama: pos (40,6.0,78), look (40,1.2,56)
-    — sightline lurus menyusuri jalan x=40, bebas gedung; hero + stall pasar +
-    mobil parkir terlihat, BUKAN tembok. (r10: koridor dilebarkan — lihat §4 —
-    fasad kini ≥7,5 dari sumbu jalan; r9 fasad 4,5 → tembok makan ~40% frame.)
+  - `onfoot`: hero jalan kaki di persimpangan Old Mercado / Downtown, `heat=2`,
+    jam 18:05 SUNSET. Spawn (0,40) DI PERSIMPANGAN jalan x=0 dan z=40
+    (zebra cross di (0,47.5); r11 (40,62) — juri: hero kecil/jauh, fasad kiri
+    ~30% frame). Kamera DI JALAN yang sama, lebih dekat: pos (0,5.0,50),
+    look (0,1.3,38) — jarak 10 (r11: 16) — sightline lurus menyusuri jalan
+    x=0 ke arah papan bank (2,7,-2); hero + stall pasar + mobil parkir +
+    palm terlihat, BUKAN tembok. Koridor x=0 sudah lebar (fasad ≥7,5).
   - `mission` ("big-score"): di depan bank, `heat=5`, jam 17:48 SUNSET, heli
     cone terlihat, foreground terisi props/palm/mobil parkir/marka, sign bank
     utuh. Spawn (2,10) di tepi jalan x=0. Kamera DI JALAN x=0: pos (0,6.2,26),
@@ -148,7 +164,7 @@ SB.state = {
 - `SB.engine.burst(x, y, z, n)` — muzzle-flash pool PERSISTEN: nyalakan `n`
   flash di titik itu (sprite + point light singkat). Pool dibuat sekali di boot.
 - `SB.engine.muzzlePos` — `THREE.Vector3` posisi moncong senjata aktif; B2
-  update tiap tembakan, lalu panggil `SB.engine.burst(...)` di titik itu.
+  update tiap tembakan, lalu panggil `SB.engine.burst()` di titik itu.
 - `SB.engine.spotCone()` → `THREE.Mesh` cone spotlight siap pakai: material
   transparan **opacity 0.10 (r9; r8 0.25 memutihkan papan bank)**, warna kuning
   pucat, `side: DoubleSide`, `depthWrite:false`. Cone r9: radius 5, tinggi 36
@@ -175,9 +191,10 @@ SB.state = {
   dan `SB.missions` (lokasi misi).
 - `SB.city.roads` — daftar ruas jalan `{x0,z0,x1,z1}` (sumbu grid). Dipakai
   traffic (B2) + spawn.
-- `SB.city.spawnPoints = { cover:[0,0], onfoot:[40,62], mission:[2,10], ... }`
-  titik spawn tiap preset (dipakai `setPreset` + B2). onfoot r9 = (40,62) di
-  jalan x=40 (r8 (60,62) di dalam gedung — JANGAN kembalikan).
+- `SB.city.spawnPoints = { cover:[0,0], onfoot:[0,40], mission:[2,10], ... }`
+  titik spawn tiap preset (dipakai `setPreset` + B2). onfoot r12 = (0,40) di
+  persimpangan jalan x=0/z=40 (r11 (40,62) di jalan x=40 — JANGAN kembalikan;
+  r8 (60,62) di dalam gedung).
 - `SB.city.bank = { pos:[2,7,-2], rotY:Math.PI/4 }` — sign
   "SOLMAR NATIONAL BANK" (canvas texture **2048×512**, teks UTUH tidak terpotong)
   di gedung bank. Posisi + rotasi TETAP ini (deviasi r5 yang terbukti benar).
@@ -199,9 +216,9 @@ SB.state = {
   blok (bx=20,k=1) & (bx=60,k=0) menghadap x=40; blok (bx=-20,k=1) &
   (bx=20,k=0) menghadap x=0. Gedung bank (bx=20,bz=-20,k=0) TIDAK berubah
   ukuran akhir (diskala 26×14×14 setelah clamp).
-- Foreground on-foot r9 (di tepi jalan x=40, BUKAN di dalam gedung blok
-  (60,60)): stall di (44,54)/(44,62)/(44,70), mobil parkir (36,58)/(36,68),
-  palm (46,50)/(46,74). Foreground big-score tetap di sekitar (2,10).
+- Foreground on-foot r12 (di tepi jalan x=0, mengikuti spawn (0,40)):
+  stall di (4,26)/(4,34)/(4,42), mobil parkir (-4,30)/(-4,40),
+  palm (6,22)/(6,46). Foreground big-score tetap di sekitar (2,10).
 
 ## 5. `SB.player` — jalan kaki + kendaraan (player.js, milik B2)
 
@@ -306,5 +323,10 @@ SB.state = {
   Jam HUD maju ≥1 menit per ~30 detik wall headless (clockRate 1, headless
   ~1–2 fps — sama seperti v3). Screenshot onfoot + mission HARUS menampilkan
   hero + jalan (varians piksel region tengah, bukan warna tembok seragam).
+- **onfoot r12 (BARU):** spawn (0,40) di persimpangan (zebra + jalan silang);
+  kamera preset (0,5.0,50) look (0,1.3,38) — jarak kamera-hero 10 (r11: 16);
+  koridor x[-7,7] z[20,60] bebas gedung tinggi; fasad terdekat ≥7,5 dari sumbu
+  x=0; screenshot onfoot HARUS menampilkan jalan + zebra + stall/palm/mobil
+  + papan bank di kejauhan (bukan tembok, bukan void).
 - SATU render kecil ≤640×360 (headless shell + swiftshader, file:// saja;
   127.0.0.1 diblokir proxy). 0 console/page error. `SB.engine.shot()` jalan.

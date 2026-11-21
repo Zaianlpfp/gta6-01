@@ -1,4 +1,4 @@
-// save.js — save/load Solmar Bay (localStorage). B4 r11, tulis segar dari tree r10.
+// save.js — save/load Solmar Bay (localStorage). B4 r12, tulis segar dari tree r11.
 (function () {
   'use strict';
   var SB = window.SB;

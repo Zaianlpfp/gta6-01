@@ -1,4 +1,4 @@
-// police.js — Solmar Bay r11 (B2). Heat 0-5, stars() authoritative.
+// police.js — Solmar Bay r12 (B2). Heat 0-5; respawn in-city.
 // Heli hovers (10,-2); cone 0.10 incl. fallback (r10: 0.25 -> 0.10). Pursuit substeps wall dt.
 var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
 var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
@@ -130,8 +130,7 @@ var f={x:-Math.sin(hh),z:-Math.cos(hh)};
 PL.roadblock.group.position.set(hx+f.x*30,0,hz+f.z*30);
 PL.roadblock.group.rotation.y=hh+Math.PI;
 PL.roadblock.cx=hx+f.x*30;PL.roadblock.cz=hz+f.z*30;};
-// Pursuit in 1/60 substeps (r8 clamped dt to 0.05). Spawn/despawn is idempotent, so the
-// whole body substeps safely; response sync once after. At dt=1/60 identical to r8.
+// Pursuit in 1/60 substeps; spawn/despawn idempotent, response sync once after.
 PL.update=function(dt){var D=dt||0;if(D>1)D=1;if(D<0)D=0;
 if(!SB.player||!SB.player.hero){PL._syncResponse();return;}
 var rem=D;
@@ -195,7 +194,11 @@ var ndx=nu.pos.x-hx,ndz=nu.pos.z-hz;
 if(ndx*ndx+ndz*ndz<625){near=true;break;}}
 SB.state.inSight=near;}
 PL._syncResponse();PL._updated=true;};
-PL._reset=function(){var hosp=(SB.city&&SB.city.spawnPoints&&SB.city.spawnPoints.hospital)||[-150,250];
+// r12: BUSTED respawn harus di dalam kota — hospital lama [-150,250] void
+// (kunci hospital tak ada di city.js); pakai hospital hanya kalau in-city.
+PL._reset=function(){var sp=(SB.city&&SB.city.spawnPoints)||{};
+var hosp=sp.onfoot||[40,62];
+if(sp.hospital&&typeof SB._inCity==='function'&&SB._inCity(sp.hospital[0],sp.hospital[1]))hosp=sp.hospital;
 if(SB.player&&SB.player.respawn)SB.player.respawn(hosp[0],hosp[1]);
 if(SB.player)SB.player.cash=Math.max(0,Math.floor((SB.player.cash||0)*0.9));
 SB.state.cash=Math.max(0,Math.floor((SB.state.cash||0)*0.9));
@@ -209,7 +212,6 @@ for(var i=0;i<PL.cops.length;i++)if(SB.engine&&SB.engine.scene)SB.engine.scene.r
 PL.cops=[];PL._bustT=0;};
 PL.busted=function(){PL._reset();};
 PL.wasted=function(){PL._reset();};
-// Wrap engine.step ONCE (SB._b2polStep guard).
 PL._installWrap=function(){if(!SB.engine||typeof SB.engine.step!=='function'||SB._b2polStep)return;
 SB._b2polStep=true;var orig=SB.engine.step;
 SB.engine.step=function(dt){PL.update(dt);return orig.call(SB.engine,dt);};};

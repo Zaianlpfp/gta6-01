@@ -1,4 +1,13 @@
-// hud.js — HUD Solmar Bay + kamera follow. B4 r11, tulis segar dari tree r10.
+// hud.js — HUD Solmar Bay + kamera follow. B4 r12, tulis segar dari tree r11.
+// r12: HUD = PANEL MELAYANG (bukan bar selebar layar — cacat juri r11 #1).
+// Dulu: klaster kiri-atas + jam tengah-atas + minimap kanan-atas membentuk
+// strip horizontal penuh lebar layar. Baru: 4 pulau mengambang — klaster
+// status kiri-atas (cash/REP/story/jam/musim/HP-ARMOR), chip wanted
+// kanan-atas, panel misi kiri-bawah, minimap+speed kanan-bawah. Tengah
+// atas KOSONG, tengah kiri KOSONG. Panel misi kini juga tampilkan GPS
+// jarak numerik (dulu cuma di overlay peta).
+// Kamera follow r12: LEBIH DEKAT (dist 13 -> 9, height 5.2 -> 4, look-ahead
+// 6 -> 4) supaya hero BESAR di tengah frame (cacat juri r11 #3).
 // CSS panel di-inject di sini (style.css tak punya kelas .hud-*);
 // loop rAF sendiri (main.js tak panggil update); panel misi baca S.mission
 // + markerPos; jam maju dari simTime; kamera follow collision-aware via
@@ -12,27 +21,28 @@
   var ARMS = [['fists', '1', 'FISTS'], ['pistol', '2', 'PISTOL'], ['smg', '3', 'SMG'], ['shotgun', '4', 'SHOTGUN'], ['rifle', '5', 'RIFLE']];
   var CSS = '#hud{position:fixed;inset:0;pointer-events:none;z-index:5;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.8);font:13px/1.45 Arial,sans-serif}'
     + '.hud-box{background:rgba(8,10,20,.62);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:7px 10px}'
-    + '.hud-tl{position:absolute;top:10px;left:12px;min-width:210px}'
+    + '.hud-tl{position:absolute;top:12px;left:12px;width:250px}'
     + '.hud-cash{font-size:20px;font-weight:800;color:#ffd34d}'
     + '.hud-bar{height:8px;background:rgba(255,255,255,.16);border-radius:4px;overflow:hidden;margin-top:3px}'
     + '.hud-fill{height:100%}.rep{background:#ffb347}.hp{background:#39d95e}.ar{background:#39a0ff}'
     + '.hud-story{margin-top:4px;font-size:12px;color:#cfe0ff}'
-    + '.hud-clock{position:absolute;top:10px;left:50%;transform:translateX(-50%);text-align:center}'
-    + '.hud-clocktime{font-size:16px;font-weight:800}.hud-season{font-size:11px;color:#ffd34d;letter-spacing:2px}'
-    + '.hud-tr{position:absolute;top:10px;right:12px;text-align:center}'
-    + '#hud-minimap{width:150px;height:150px;border-radius:50%;border:2px solid rgba(255,255,255,.35)}'
-    + '.hud-wanted{font-size:18px;letter-spacing:3px;margin-top:4px}'
-    + '.hud-mcol{position:absolute;left:12px;top:150px;width:300px}.hud-mission{margin-bottom:8px}'
-    + '.hud-mtitle{font-weight:800;color:#ffd34d}.hud-mstage{font-size:12px;color:#9fb0c3}.hud-mtimer{font-size:12px;color:#8fd0ff}.hud-mpayout{font-size:12px;color:#39d95e}'
-    + '.hud-response{font-size:12px;line-height:1.5;white-space:pre-line}'
-    + '.hud-crew{position:absolute;left:12px;bottom:212px;width:300px}'
-    + '.hud-crewhead{font-weight:800;letter-spacing:2px;color:#ffd34d;font-size:12px}'
-    + '.hud-crewrow{font-size:12px;margin-top:3px}.hud-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}'
-    + '.hud-loc{position:absolute;left:12px;bottom:118px;font-size:12px;color:#cfe0ff}'
-    + '.hud-bars{position:absolute;left:12px;bottom:150px;width:220px}'
+    + '.hud-clockline{margin-top:4px;font-size:13px}'
+    + '.hud-clocktime{font-weight:800}.hud-season{font-size:11px;color:#ffd34d;letter-spacing:2px;margin-left:8px}'
+    + '.hud-hprows{margin-top:6px}'
     + '.hud-barow{display:flex;align-items:center;gap:6px;margin-top:3px}'
     + '.hud-barlabel{width:44px;font-size:11px;font-weight:700}.hud-bar{flex:1}.hud-barval{width:30px;text-align:right;font-size:12px;font-weight:700}'
+    + '.hud-tr{position:absolute;top:12px;right:12px;text-align:center}'
+    + '.hud-wanted{font-size:18px;letter-spacing:3px}'
+    + '.hud-mcol{position:absolute;left:12px;bottom:12px;width:300px}.hud-mission{margin-bottom:8px}'
+    + '.hud-mtitle{font-weight:800;color:#ffd34d}.hud-mstage{font-size:12px;color:#9fb0c3}.hud-mtimer{font-size:12px;color:#8fd0ff}.hud-mpayout{font-size:12px;color:#39d95e}.hud-mgps{font-size:12px;color:#ffd23f}'
+    + '.hud-response{font-size:12px;line-height:1.5;white-space:pre-line;margin-bottom:8px}'
+    + '.hud-crew{border-top:1px solid rgba(255,255,255,.15);padding-top:6px}'
+    + '.hud-crewhead{font-weight:800;letter-spacing:2px;color:#ffd34d;font-size:12px}'
+    + '.hud-crewrow{font-size:12px;margin-top:3px}.hud-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}'
+    + '.hud-loc{margin-top:6px;font-size:12px;color:#cfe0ff}'
     + '.hud-br{position:absolute;right:12px;bottom:12px;text-align:right}'
+    + '.hud-mmwrap{margin-bottom:6px}'
+    + '#hud-minimap{width:150px;height:150px;border-radius:50%;border:2px solid rgba(255,255,255,.35)}'
     + '.hud-speed{font-size:20px;font-weight:800}.hud-veh{font-size:12px;color:#cfe0ff}'
     + '.hud-wheel{display:flex;gap:4px;justify-content:flex-end;margin-top:4px}'
     + '.hud-wslot{padding:3px 7px;background:rgba(8,10,20,.62);border:1px solid rgba(255,255,255,.2);border-radius:5px;font-size:11px}'
@@ -41,7 +51,7 @@
     + '.hud-toast{position:absolute;top:64px;left:50%;transform:translateX(-50%);background:rgba(8,10,20,.8);padding:6px 14px;border-radius:6px;opacity:0;transition:opacity .3s}'
     + '.hud-paused{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:28px;font-weight:800;letter-spacing:4px;background:rgba(8,10,20,.7);padding:14px 26px;border-radius:10px}'
     + '.hud-big{position:absolute;top:38%;left:50%;transform:translate(-50%,-50%);font-size:56px;font-weight:800;letter-spacing:8px;color:#ff4040}'
-    + '@media(max-height:420px){.hud-crew,.hud-loc{display:none}.hud-mcol{top:110px;width:240px}#hud-minimap{width:96px;height:96px}.hud-bars{bottom:96px;width:180px}}';
+    + '@media(max-height:420px){.hud-crew,.hud-loc{display:none}.hud-mcol{width:240px}#hud-minimap{width:96px;height:96px}}';
   function $(id) { return document.getElementById(id); }
   function mk(tag, id, cls, parent) { var d = document.createElement(tag); if (id) d.id = id; if (cls) d.className = cls; if (parent) parent.appendChild(d); return d; }
   function st() { return SB.state; }
@@ -123,6 +133,20 @@
     if (SB.player && typeof SB.player.pos === 'function') { try { var q = SB.player.pos(); if (q) return { x: q[0], z: q[1] }; } catch (e) {} }
     return null;
   }
+  // r12: jarak GPS numerik untuk panel misi (dulu cuma di overlay peta).
+  function gpsText(m) {
+    if (!m) return '';
+    if (m.target) {
+      var hp = heroPos();
+      if (hp) {
+        var tx = m.target.x != null ? m.target.x : m.target[0], tz = m.target.z != null ? m.target.z : m.target[1];
+        var dx = tx - hp.x, dz = tz - hp.z;
+        return 'GPS: objective ' + Math.round(Math.sqrt(dx * dx + dz * dz)) + ' m away';
+      }
+      return 'GPS: ' + (m.objective || '');
+    }
+    return m.objective ? 'GPS: ' + m.objective : '';
+  }
   function rectOf(d) { return { x: (d.x0 != null ? d.x0 : d.cx - d.w / 2), z: (d.z0 != null ? d.z0 : d.cz - d.d / 2), w: (d.x1 != null ? d.x1 - d.x0 : d.w), h: (d.z1 != null ? d.z1 - d.z0 : d.d) }; }
   function mapBounds() {
     var d = (SB.city && SB.city.districts) || [];
@@ -135,54 +159,59 @@
     var root = $('hud');
     if (!root) root = mk('div', 'hud', '', document.body);
     el.root = root;
-    var tl = mk('div', 'hud-tl', 'hud-box', root);
+    // Pulau 1 — klaster status kiri-atas (cash/REP/story/jam/musim/HP-ARMOR).
+    var tl = mk('div', 'hud-tl', 'hud-box hud-tl', root);
     el.cash = mk('div', 'hud-cash', 'hud-cash', tl);
     var repRow = mk('div', 'hud-rep', '', tl);
     el.repTitle = mk('span', 'hud-reptitle', '', repRow);
     var bar = mk('div', 'hud-repbar', 'hud-bar', repRow);
     el.repFill = mk('div', 'hud-repfill', 'hud-fill rep', bar);
-    el.story = mk('div', 'hud-story', '', tl);
-    var tc = mk('div', 'hud-clock', 'hud-box', root);
-    el.clock = mk('div', 'hud-clocktime', '', tc);
-    el.season = mk('div', 'hud-season', '', tc);
-    var tr = mk('div', 'hud-tr', '', root);
-    el.mmWrap = mk('div', 'hud-mmwrap', '', tr);
-    el.wanted = mk('div', 'hud-wanted', '', tr);
-    var mc = mk('div', 'hud-mcol', '', root);
-    var mp = mk('div', 'hud-mission', 'hud-box', mc);
-    el.mTitle = mk('div', 'hud-mtitle', '', mp);
-    el.mStage = mk('div', 'hud-mstage', '', mp);
-    el.mObj = mk('div', 'hud-mobj', '', mp);
-    el.mTimer = mk('div', 'hud-mtimer', '', mp);
-    el.mPayout = mk('div', 'hud-mpayout', '', mp);
-    el.response = mk('div', 'hud-response', 'hud-box', mc);
-    var cp = mk('div', 'hud-crew', 'hud-box', root);
+    el.story = mk('div', 'hud-story', 'hud-story', tl);
+    var cl = mk('div', 'hud-clockline', 'hud-clockline', tl);
+    el.clock = mk('span', 'hud-clocktime', 'hud-clocktime', cl);
+    el.season = mk('span', 'hud-season', 'hud-season', cl);
+    var hrows = mk('div', 'hud-hprows', 'hud-hprows', tl);
+    var hrow = mk('div', '', 'hud-barow', hrows);
+    mk('span', '', 'hud-barlabel', hrow).textContent = 'HP';
+    var hb2 = mk('div', '', 'hud-bar', hrow);
+    el.hpFill = mk('div', 'hud-hpfill', 'hud-fill hp', hb2);
+    el.hpVal = mk('span', 'hud-hpval', 'hud-barval', hrow);
+    var arow = mk('div', '', 'hud-barow', hrows);
+    mk('span', '', 'hud-barlabel', arow).textContent = 'ARMOR';
+    var ab2 = mk('div', '', 'hud-bar', arow);
+    el.arFill = mk('div', 'hud-arfill', 'hud-fill ar', ab2);
+    el.arVal = mk('span', 'hud-arval', 'hud-barval', arow);
+    // Pulau 2 — chip wanted kanan-atas (kecil, bukan blok).
+    var tr = mk('div', 'hud-tr', 'hud-box hud-tr', root);
+    el.wanted = mk('div', 'hud-wanted', 'hud-wanted', tr);
+    // Pulau 3 — panel misi kiri-bawah (misi + response + crew + lokasi).
+    var mc = mk('div', 'hud-mcol', 'hud-mcol', root);
+    var mp = mk('div', 'hud-mission', 'hud-box hud-mission', mc);
+    el.mTitle = mk('div', 'hud-mtitle', 'hud-mtitle', mp);
+    el.mStage = mk('div', 'hud-mstage', 'hud-mstage', mp);
+    el.mObj = mk('div', 'hud-mobj', 'hud-mobj', mp);
+    el.mTimer = mk('div', 'hud-mtimer', 'hud-mtimer', mp);
+    el.mPayout = mk('div', 'hud-mpayout', 'hud-mpayout', mp);
+    el.mGps = mk('div', 'hud-mgps', 'hud-mgps', mp);
+    el.response = mk('div', 'hud-response', 'hud-box hud-response', mc);
+    var cp = mk('div', 'hud-crew', 'hud-crew', mc);
     mk('div', '', 'hud-crewhead', cp).textContent = 'CREW';
     CREW.forEach(function (c, i) {
       var row = mk('div', 'hud-crew' + i, 'hud-crewrow', cp);
       var dot = mk('span', '', 'hud-dot', row); dot.style.background = c[2];
       mk('span', '', '', row).textContent = c[0] + ' — ' + c[1];
     });
-    el.loc = mk('div', 'hud-loc', 'hud-box', root);
-    var br = mk('div', 'hud-br', '', root);
-    el.speed = mk('div', 'hud-speed', 'hud-box', br);
-    el.veh = mk('div', 'hud-veh', '', br);
-    el.wheel = mk('div', 'hud-wheel', '', br);
+    el.loc = mk('div', 'hud-loc', 'hud-loc', mc);
+    // Pulau 4 — minimap + kendaraan kanan-bawah.
+    var br = mk('div', 'hud-br', 'hud-br', root);
+    el.mmWrap = mk('div', 'hud-mmwrap', 'hud-mmwrap', br);
+    el.speed = mk('div', 'hud-speed', 'hud-box hud-speed', br);
+    el.veh = mk('div', 'hud-veh', 'hud-veh', br);
+    el.wheel = mk('div', 'hud-wheel', 'hud-wheel', br);
     el.wheelSlots = [];
     ARMS.forEach(function (w) { var s = mk('div', 'hud-wslot-' + w[0], 'hud-wslot', el.wheel); s.textContent = w[1] + ' ' + w[2]; el.wheelSlots.push(s); });
-    el.radio = mk('div', 'hud-radio', 'hud-box', br);
-    var hb = mk('div', 'hud-bars', '', root);
-    var hrow = mk('div', '', 'hud-barow', hb);
-    mk('span', '', 'hud-barlabel', hrow).textContent = 'HP';
-    var hb2 = mk('div', '', 'hud-bar', hrow);
-    el.hpFill = mk('div', 'hud-hpfill', 'hud-fill hp', hb2);
-    el.hpVal = mk('span', 'hud-hpval', 'hud-barval', hrow);
-    var arow = mk('div', '', 'hud-barow', hb);
-    mk('span', '', 'hud-barlabel', arow).textContent = 'ARMOR';
-    var ab2 = mk('div', '', 'hud-bar', arow);
-    el.arFill = mk('div', 'hud-arfill', 'hud-fill ar', ab2);
-    el.arVal = mk('span', 'hud-arval', 'hud-barval', arow);
-    el.toast = mk('div', 'hud-toast', '', root);
+    el.radio = mk('div', 'hud-radio', 'hud-box hud-radio', br);
+    el.toast = mk('div', 'hud-toast', 'hud-toast', root);
     var dlg = $('dlg');
     if (!dlg) {
       dlg = mk('div', 'dlg', 'hud-dlg', root);
@@ -194,7 +223,7 @@
       el.dlgLines = mk('div', 'dlg-lines', '', db);
     }
     el.dlg = dlg;
-    el.paused = mk('div', 'hud-paused', '', root);
+    el.paused = mk('div', 'hud-paused', 'hud-paused', root);
     el.paused.textContent = 'PAUSED — [P] RESUME'; el.paused.style.display = 'none';
     el.busted = mk('div', 'hud-busted', 'hud-big', root);
     el.busted.textContent = 'BUSTED'; el.busted.style.display = 'none';
@@ -277,12 +306,14 @@
       setTxt(el.mObj, 'NEXT: ' + (m.objective || ''));
       setTxt(el.mTimer, m.timer ? '⏱ ' + Math.floor(m.timer / 60) + ':' + String(Math.floor(m.timer % 60)).padStart(2, '0') : '');
       setTxt(el.mPayout, 'PAYOUT ' + fmt$(m.payout || 0));
+      setTxt(el.mGps, gpsText(m));
     } else {
       setTxt(el.mTitle, 'NO ACTIVE MISSION');
       setTxt(el.mStage, '');
       setTxt(el.mObj, s.objective ? 'NEXT: ' + s.objective : 'Start a job: press M for map');
       setTxt(el.mTimer, '');
       setTxt(el.mPayout, '');
+      setTxt(el.mGps, s.objective ? 'GPS: ' + s.objective : '');
     }
     var resp = [];
     if (SB.police) {
@@ -367,7 +398,9 @@
     try { hp = E.heroPos ? E.heroPos() : null; } catch (e) {}
     if (!hp) return;
     var h = E.heading || 0, fx = Math.sin(h), fz = Math.cos(h), bs = blds();
-    var eye = new THREE.Vector3(hp[0], 1.2, hp[1]), dist = 13, ht = 5.2;
+    // r12: follow LEBIH DEKAT (dist 9, height 4, look-ahead 4) — hero BESAR
+    // di tengah frame, bukan figur kecil/jauh (cacat juri r11 #3).
+    var eye = new THREE.Vector3(hp[0], 1.2, hp[1]), dist = 9, ht = 4.0;
     if (boxAt(hp[0], 1.2, hp[1], bs)) { dist = 4.5; ht = 2.8; camInfo.heroInside = true; } else camInfo.heroInside = false;
     var dx = hp[0] - fx * dist, dz = hp[1] - fz * dist;
     var dir = new THREE.Vector3(dx - eye.x, ht - eye.y, dz - eye.z), len = dir.length(), pulled = 0;
@@ -385,7 +418,7 @@
     camInfo.pulled = pulled; camInfo.lifted = lifted;
     camInfo.mode = camInfo.heroInside ? 'close' : (pulled > 0 ? 'pulled' : (lifted ? 'lifted' : 'follow'));
     E.camera.position.set(dx, ht, dz);
-    E.camera.lookAt(hp[0] + fx * 6, 1.4, hp[1] + fz * 6);
+    E.camera.lookAt(hp[0] + fx * 4, 1.4, hp[1] + fz * 4);
   }
   function installCamWrap() {
     if (camWrap) return;

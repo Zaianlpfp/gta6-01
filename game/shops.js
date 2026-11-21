@@ -1,4 +1,4 @@
-// shops.js — toko / safehouse / respray Solmar Bay. B4 r11, tulis segar dari tree r10.
+// shops.js — toko / safehouse / respray Solmar Bay. B4 r12, tulis segar dari tree r11.
 // Potong SB.player.cash; respray $200 hapus 1 bintang; safehouse = save.
 (function () {
   'use strict';

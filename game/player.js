@@ -1,5 +1,4 @@
-// player.js — Solmar Bay r11 (B2). SB.input owned here; substeps full wall dt.
-// Pistol 34 -> boss dies 7th shot; shotgun 120 -> 2 shots.
+// player.js — Solmar Bay r12 (B2). Input owned here; respawn guard.
 var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
 var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
 var WEAPONS={
@@ -12,7 +11,6 @@ var WALK=4,RUN=7;
 function _clamp(v,a,b){return v<a?a:v>b?b:v;}
 function _angDiff(a,b){var d=b-a;while(d>Math.PI)d-=Math.PI*2;while(d<-Math.PI)d+=Math.PI*2;return d;}
 function _fwd(h){return{x:-Math.sin(h),z:-Math.cos(h)};}
-// Input (B2 owns it); a harness-provided SB.input is kept as-is.
 SB.input=SB.input||{};
 var IN=SB.input;
 IN.keys=IN.keys||{};IN.mouse=IN.mouse||{down:false};
@@ -42,6 +40,11 @@ return false;};
 SB._clampPos=SB._clampPos||function(x,z){
 var b=(SB.city&&SB.city.bounds)||{minX:-560,maxX:470,minZ:-470,maxZ:530};
 return{x:_clamp(x,b.minX,b.maxX),z:_clamp(z,b.minZ,b.maxZ)};};
+// r12: titik di dalam kota? Envelope = bbox distrik (x [-140,215], z [-90,185]).
+SB._inCity=SB._inCity||function(x,z){var d=SB.city&&SB.city.districts,a=1e9,b=-1e9,c=1e9,e=-1e9,i,q;
+if(!d||!d.length)return x>=-140&&x<=215&&z>=-90&&z<=185;
+for(i=0;i<d.length;i++){q=d[i];a=Math.min(a,q.cx-q.w/2);b=Math.max(b,q.cx+q.w/2);c=Math.min(c,q.cz-q.d/2);e=Math.max(e,q.cz+q.d/2);}
+return x>=a&&x<=b&&z>=c&&z<=e;};
 function _box(w,h,d,c,x,y,z){var m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),
 new THREE.MeshStandardMaterial({color:c,roughness:.85}));m.position.set(x,y,z);return m;}
 function mkPed(shirt,skin){var g=new THREE.Group();
@@ -106,6 +109,8 @@ if(P.health<=0){P.health=0;P._sync();P._wasted=true;
 if(SB.police&&SB.police.wasted)SB.police.wasted();}};
 P.respawn=function(x,z){P._wasted=false;P.health=100;P.armor=0;
 if(SB.vehicles)SB.vehicles.active=null;
+// r12: respawn di luar kota -> spawn onfoot.
+if(typeof SB._inCity==='function'&&!SB._inCity(x,z)){var o=(SB.city&&SB.city.spawnPoints&&SB.city.spawnPoints.onfoot)||[40,62];x=o[0];z=o[1];}
 P.setPosition(x,z,0);if(P.hero)P.hero.visible=true;P._sync();};
 P.selectWeapon=function(n){n=+n;if(!WEAPONS[n]||WEAPONS[n].locked)return false;
 P.weapon=n;P._sync();return true;};
@@ -163,7 +168,6 @@ if(t.ud.boss&&SB.missions&&typeof SB.missions.standoffDown==='function')
 SB.missions.standoffDown();}
 return{hit:true,killed:killed,dmg:dmg,boss:!!t.ud.boss,enforcer:!!t.ud.enforcer};}
 P._pressed=function(c){var d=IN.isDown(c),was=P._prev[c];P._prev[c]=d;return d&&!was;};
-// Substep full wall dt in 1/60 slices; input once per call.
 P._tick=function(dt){if(!P.hero)return;
 var D=dt||0;if(D>1)D=1;if(D<0)D=0;P._cool-=D;
 if(IN.isDown('Digit1'))P.selectWeapon(1);if(IN.isDown('Digit2'))P.selectWeapon(2);
@@ -194,12 +198,10 @@ if(SB.input&&SB.input.mouse&&SB.input.mouse.down&&P._cool<=0){
 P.fire();P._cool=WEAPONS[P.weapon].rate;}
 if(SB.vehicles&&SB.vehicles._trafficTick)SB.vehicles._trafficTick(D);
 if((SB.state.preset==='cover'||SB.state.preset==='onfoot'||SB.state.preset==='mission')&&!SB._b2traf&&SB.vehicles&&SB.vehicles.spawnTraffic){
-// r10: traffic spawn juga di onfoot/mission (r9 cuma cover — jalan kosong).
 SB._b2traf=true;SB.vehicles.spawnTraffic(24);}
 if(P.health<=0&&!P._wasted){P._wasted=true;
 if(SB.police&&SB.police.wasted)SB.police.wasted();}};
 P.update=P._tick;
-// Wrap engine.step ONCE (SB._b2step guard).
 P._installWrap=function(){if(!SB.engine||typeof SB.engine.step!=='function'||SB._b2step)return;
 SB._b2step=true;var orig=SB.engine.step;
 SB.engine.step=function(dt){P._tick(dt);return orig.call(SB.engine,dt);};};

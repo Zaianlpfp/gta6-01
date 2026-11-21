@@ -1,5 +1,4 @@
-// vehicles.js — Solmar Bay r11 (B2). Hero magenta + white roof; traffic never pink, 12m+ from hero.
-// Driving substeps full wall dt. Speeds m/s (HUD km/h).
+// vehicles.js — Solmar Bay r12 (B2). Hero magenta + white roof; traffic never pink, 12m+ from hero.
 var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
 var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
 var KINDS={sport:{name:'VENTO STRADA',color:0x38bdf8,top:55,acc:16},
@@ -38,7 +37,6 @@ var v={id:'v'+(++V._vid),mesh:mesh,group:mesh,name:opts.name||k.name,kind:kind,
 color:opts.color!==undefined?opts.color:k.color,cond:100,parked:!!opts.parked,
 pos:mesh.position,heading:heading||0,speed:0,top:k.top,acc:k.acc};
 V.list.push(v);return v;};
-// Spots[0] = pink hero car (magenta + white roof, owned from spawn; entering it is never theft).
 V.spawnParked=function(){if(SB._b2parked)return;SB._b2parked=true;
 var spots=[['sport',8,60,0],['sedan',-8,-40,Math.PI],['taxi',108,150,Math.PI/2],
 ['muscle',-92,-150,0],['van',250,60,-Math.PI/2],['truck',350,450,Math.PI],

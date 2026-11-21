@@ -1,4 +1,4 @@
-// radio.js — 3 stasiun Solmar Bay. B4 r11, tulis segar dari tree r10.
+// radio.js — 3 stasiun Solmar Bay. B4 r12, tulis segar dari tree r11.
 (function () {
   'use strict';
   var SB = window.SB;

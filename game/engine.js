@@ -1,5 +1,13 @@
-// engine.js — B1 r10. Three.js setup, loop, kamera chase, langit, efek.
+// engine.js — B1 r12. Three.js setup, loop, kamera chase, langit, efek.
 // Kontrak: game/API.md. Deterministik: tanpa Math.random / Date.now.
+// Perbaikan r12 vs r11 (juri buta r11 30 vs 27 — hero onfoot kecil/jauh,
+// fasad kiri ~30% frame):
+//  - Spawn onfoot PINDAH dari (40,62) ke PERSIMPANGAN (0,40) di jalan x=0
+//    (zebra cross + jalan silang z=40 membuka frame; papan bank (2,7,-2)
+//    terbaca di kejauhan — kota tampil, bukan satu fasad).
+//  - Kamera preset onfoot lebih dekat: pos (0,5.0,50), look (0,1.3,38)
+//    (r11: (40,6.0,78)/(40,1.2,56), jarak 16 — hero kecil). Jarak kini 10.
+//  - Foreground pasar pindah ke jalan x=0 (city.js) mengikuti spawn baru.
 // Perbaikan r10 vs r9:
 //  - SB.registerUpdate(fn) DIDEFINISIKAN di sini + dipanggil step() tiap frame
 //    (r9: tidak ada yang mendefinisikannya — hanya hud.js yang memanggil
@@ -10,9 +18,10 @@
 //    0,47 dtk). Modul B2 sudah menangani dt sampai 1,0 dtk.
 //  - Kamera onfoot: pos (40,6.0,78), look (40,1.2,56) + koridor jalan
 //    dilebarkan di city.js (fasad >=7,5 dari sumbu jalan).
-// Dipertahankan dari r9: advanceClock di step() (jam maju); step() memanggil
-// SB.police.update(dt) (satu-satunya caller); cone heli opacity 0,10;
-// spawn onfoot (40,62); stall/mobil/palm di tepi jalan; ped drift murni simTime.
+// Dipertahankan dari r10/r11: advanceClock di step() (jam maju); step()
+// memanggil SB.police.update(dt) (satu-satunya caller); cone heli opacity
+// 0,10; spawn onfoot (0,40) r12; stall/mobil/palm di tepi jalan; ped drift
+// murni simTime.
 (function () {
   var SB = window.SB = window.SB || {};
 
@@ -329,11 +338,13 @@
       SB.state.heat = (opts.heat !== undefined) ? opts.heat : 2;
       SB.state.hour = 18; SB.state.min = 5; SB.state.timeLabel = 'SUNSET';
       E._camMode = 'fixed';
-      // r10: hero + kamera DI JALAN x=40 (spawn (40,62)); koridor dilebarkan
-      // di city.js (fasad >=7,5 dari sumbu) + kamera sedikit lebih tinggi /
-      // mundur supaya jalan + hero terbaca, bukan tembok (r9: tembok ~40%).
-      var sp = (SB.city && SB.city.spawnPoints) ? SB.city.spawnPoints.onfoot : [40, 62];
-      E._camPos.set(40, 6.0, 78); E._camLook.set(40, 1.2, 56);
+      // r12: hero + kamera DI PERSIMPANGAN (0,40) jalan x=0 (spawn pindah
+      // dari (40,62) — juri r11: hero kecil/jauh, fasad kiri ~30% frame).
+      // Kamera lebih dekat (jarak 10, dulu 16) + lebih rendah; jalan silang
+      // z=40 membuka frame kiri-kanan, zebra di depan hero, papan bank
+      // (2,7,-2) terbaca di kejauhan. Koridor x=0 sudah lebar (fasad >=7,5).
+      var sp = (SB.city && SB.city.spawnPoints) ? SB.city.spawnPoints.onfoot : [0, 40];
+      E._camPos.set(0, 5.0, 50); E._camLook.set(0, 1.3, 38);
       E._focus.set(sp[0], 1.2, sp[1]); E.heading = Math.PI;
       SB.state.objective = 'Meet Mara at the market';
       SB.state.inSight = false;

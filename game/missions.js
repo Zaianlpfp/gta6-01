@@ -1,4 +1,4 @@
-/* missions.js — 8 misi cerita "Solmar Bay" (gta6-01, rebuild r11).
+/* missions.js — 8 misi cerita "Solmar Bay" (gta6-01, rebuild r12).
    Kontrak: game/API.md §8. Deterministik penuh (tanpa acak / jam dinding).
    Misi 1: +$500 / REP +130. Misi 2: standoff Saltjack (boss hp 220,
    userData.boss + enforcer=true). Marker objektif: berlian merah KECIL.
