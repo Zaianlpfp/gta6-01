@@ -1,5 +1,5 @@
-// vehicles.js — Solmar Bay r10 (B2). r10: retype r9; hero car unique magenta + white roof, traffic
-// never pink and kept 12m+ from hero. Driving substeps full wall dt. Speeds m/s (HUD km/h).
+// vehicles.js — Solmar Bay r11 (B2). Hero magenta + white roof; traffic never pink, 12m+ from hero.
+// Driving substeps full wall dt. Speeds m/s (HUD km/h).
 var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
 var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
 var KINDS={sport:{name:'VENTO STRADA',color:0x38bdf8,top:55,acc:16},

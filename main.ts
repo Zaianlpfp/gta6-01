@@ -1,3 +1,4 @@
+// r11: rebuild from r10 tree 3185538 - entrypoint authored in-session
 // Solmar Bay — build the entry: copy game/ + screenshots/ into the output
 // directory and write /output/dossier.json with the vendored make.fun library.
 // Node 22, standard library only. Outside the grader's container,

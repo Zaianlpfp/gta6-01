@@ -1,5 +1,5 @@
-// player.js — Solmar Bay r10 (B2). r10: retype r9; B2 OWNS SB.input (r8: none existed, speed stuck 0);
-// movement substeps full wall dt. Pistol 34 -> boss dies 7th shot; shotgun 120 -> 2 shots.
+// player.js — Solmar Bay r11 (B2). SB.input owned here; substeps full wall dt.
+// Pistol 34 -> boss dies 7th shot; shotgun 120 -> 2 shots.
 var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
 var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
 var WEAPONS={
@@ -163,8 +163,7 @@ if(t.ud.boss&&SB.missions&&typeof SB.missions.standoffDown==='function')
 SB.missions.standoffDown();}
 return{hit:true,killed:killed,dmg:dmg,boss:!!t.ud.boss,enforcer:!!t.ud.enforcer};}
 P._pressed=function(c){var d=IN.isDown(c),was=P._prev[c];P._prev[c]=d;return d&&!was;};
-// Substep full wall dt in 1/60 slices (r8 clamped dt to 0.05: at 1fps sim ran 20x slow).
-// Discrete input once per call; at dt=1/60 identical to r8.
+// Substep full wall dt in 1/60 slices; input once per call.
 P._tick=function(dt){if(!P.hero)return;
 var D=dt||0;if(D>1)D=1;if(D<0)D=0;P._cool-=D;
 if(IN.isDown('Digit1'))P.selectWeapon(1);if(IN.isDown('Digit2'))P.selectWeapon(2);
@@ -195,8 +194,7 @@ if(SB.input&&SB.input.mouse&&SB.input.mouse.down&&P._cool<=0){
 P.fire();P._cool=WEAPONS[P.weapon].rate;}
 if(SB.vehicles&&SB.vehicles._trafficTick)SB.vehicles._trafficTick(D);
 if((SB.state.preset==='cover'||SB.state.preset==='onfoot'||SB.state.preset==='mission')&&!SB._b2traf&&SB.vehicles&&SB.vehicles.spawnTraffic){
-// r10 integrator: traffic hanya spawn di cover (r9) -> jalan onfoot/mission
-// kosong, pixel-diff ~0. Sekarang spawn juga di onfoot/mission.
+// r10: traffic spawn juga di onfoot/mission (r9 cuma cover — jalan kosong).
 SB._b2traf=true;SB.vehicles.spawnTraffic(24);}
 if(P.health<=0&&!P._wasted){P._wasted=true;
 if(SB.police&&SB.police.wasted)SB.police.wasted();}};

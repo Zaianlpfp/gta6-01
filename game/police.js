@@ -1,6 +1,5 @@
-// police.js — Solmar Bay r10 (B2): police + heli AIR-1/GULL-1. Heat 0-5, stars() authoritative.
-// r10: heli hovers (10,-2) so its cone no longer whites out the bank sign. Pursuit substeps wall dt.
-// r10 FIX: fallback cone opacity 0.25 -> 0.10 (no second cone can white out the bank sign).
+// police.js — Solmar Bay r11 (B2). Heat 0-5, stars() authoritative.
+// Heli hovers (10,-2); cone 0.10 incl. fallback (r10: 0.25 -> 0.10). Pursuit substeps wall dt.
 var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
 var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
 var UNITS=['MARLIN-11','SNAPPER-25','TARPON-18','IBIS-43','HERON-17','KESTREL-31'];

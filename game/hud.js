@@ -1,4 +1,4 @@
-// hud.js — HUD Solmar Bay + kamera follow. B4 r10, tulis segar dari tree r9.
+// hud.js — HUD Solmar Bay + kamera follow. B4 r11, tulis segar dari tree r10.
 // CSS panel di-inject di sini (style.css tak punya kelas .hud-*);
 // loop rAF sendiri (main.js tak panggil update); panel misi baca S.mission
 // + markerPos; jam maju dari simTime; kamera follow collision-aware via
