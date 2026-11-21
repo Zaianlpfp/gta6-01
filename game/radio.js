@@ -1,24 +1,46 @@
-// radio.js — 3 stasiun Solmar Bay. B4 r12, tulis segar dari tree r11.
+// Solmar Bay — gta6-01 rebuild r13. Radio stations (fresh).
+// Three stations, switched with Q (cycle forward). Each station has its own
+// bassline in SB.audio; switching a station switches the music with it.
+// The HUD radio widget reads SB.radio.current() for its label.
 (function () {
   'use strict';
-  var SB = window.SB;
+
+  var SB = window.SB || (window.SB = {});
+
   var STATIONS = [
-    { name: 'WAVE 88.1', genre: 'sunset synth', bpm: 88, tracks: ['Neon Drive — Pink Horizon', 'Palm Static — Coral Ghosts', 'Sunset Run — Vega Bay'] },
-    { name: 'SOL 101.9', genre: 'latin pop', bpm: 100, tracks: ['Sol de Medianoche — Marisol', 'Calle Ocho — Los Palmeros', 'Brisa del Mar — Solmar'] },
-    { name: 'BAY 96.5', genre: 'funk/disco', bpm: 116, tracks: ['Disco Bay — The Flamingos', 'Night Swim — Velvet Tide', 'Pink Flamingo — DJ Palma'] }
+    { name: 'WAVE 88.1', genre: 'Synthwave', freq: '88.1' },
+    { name: 'SOL 101.9', genre: 'Latin Drive', freq: '101.9' },
+    { name: 'BAY 96.5', genre: 'Chill Bay', freq: '96.5' },
   ];
-  var idx = 0, track = 0, playing = true;
-  function apply() {
-    var s = STATIONS[idx];
-    SB.state.radio = { station: idx, name: s.name, track: s.tracks[track], playing: playing };
-    if (SB.audio && typeof SB.audio.setStation === 'function') { try { SB.audio.setStation(playing ? idx : -1); } catch (e) {} }
-    if (typeof SB.emit === 'function') SB.emit('radio', SB.state.radio);
-  }
-  function play(i) { idx = ((i % 3) + 3) % 3; track = 0; playing = true; apply(); return current(); }
-  function next() { return play(idx + 1); }
-  function prev() { return play(idx - 1); }
-  function nextTrack() { track = (track + 1) % STATIONS[idx].tracks.length; apply(); return current(); }
-  function toggle() { playing = !playing; apply(); return current(); }
-  function current() { var s = STATIONS[idx]; return { station: idx, name: s.name, track: s.tracks[track], playing: playing, bpm: s.bpm, genre: s.genre }; }
-  SB.radio = { STATIONS: STATIONS, stations: STATIONS, play: play, next: next, prev: prev, nextTrack: nextTrack, toggle: toggle, current: current };
+
+  var radio = {
+    stations: STATIONS,
+    index: 0,
+
+    current: function () {
+      return STATIONS[this.index];
+    },
+
+    label: function () {
+      return STATIONS[this.index].name;
+    },
+
+    setStation: function (i) {
+      var n = STATIONS.length;
+      this.index = ((i % n) + n) % n;
+      if (SB.audio) SB.audio.startStation(this.index);
+      if (SB.hud && typeof SB.hud.update === 'function') SB.hud.update();
+      return this.current();
+    },
+
+    next: function () {
+      return this.setStation(this.index + 1);
+    },
+
+    prev: function () {
+      return this.setStation(this.index - 1);
+    },
+  };
+
+  SB.radio = radio;
 })();

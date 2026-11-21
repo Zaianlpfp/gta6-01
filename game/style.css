@@ -1,23 +1,341 @@
-/* Solmar Bay — layout + HUD overlay (B5). Canvas game penuh layar, HUD DOM di atasnya. */
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0b0b14; font-family: 'Segoe UI', Arial, sans-serif; }
-#game, #game canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
-#hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.8); }
-#hud .panel { background: rgba(8,10,20,.55); border: 1px solid rgba(255,255,255,.18); border-radius: 8px; padding: 8px 10px; }
-#minimap { position: fixed; top: 12px; right: 12px; z-index: 6; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); }
-#dlg { position: fixed; left: 14px; bottom: 14px; z-index: 7; max-width: 460px; background: rgba(8,10,20,.78); border: 1px solid rgba(255,255,255,.22); border-radius: 10px; padding: 10px 12px; color: #fff; }
-#dlg img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; float: left; margin-right: 10px; }
-#dlg .who { font-weight: 700; color: #ffd34d; }
-#paused, #start-screen { position: fixed; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center; flex-direction: column; background: rgba(5,6,14,.55); color: #fff; text-align: center; }
-#paused h1, #start-screen h1 { margin: 0 0 8px; font-size: 44px; letter-spacing: 6px; }
-#start-screen button { pointer-events: auto; font-size: 18px; padding: 12px 28px; border: 0; border-radius: 8px; background: #ff2e88; color: #fff; cursor: pointer; }
-#map-overlay, #mapov { position: fixed; inset: 0; z-index: 8; background: rgba(4,6,12,.92); color: #fff; }
-#mapov { display: flex; flex-direction: column; }
-.map-head { display: flex; align-items: baseline; gap: 14px; padding: 10px 18px 6px; }
-#map-title { font-size: 26px; font-weight: 800; letter-spacing: 4px; }
-#map-sub { color: #9fb0c3; font-size: 13px; }
-.map-body { display: flex; flex: 1; min-height: 0; padding: 0 18px 14px; gap: 16px; }
-#map-canvas { flex: none; max-width: 760px; max-height: 620px; border: 1px solid rgba(255,255,255,.25); border-radius: 8px; }
-.map-side { flex: 1; min-width: 0; overflow: auto; font-size: 13px; line-height: 1.5; }
-.map-sidehead { font-weight: 800; letter-spacing: 2px; margin: 8px 0 4px; color: #ffd34d; }
-.hidden { display: none !important; }
+/* game/style.css — gaya HUD + peta "Solmar Bay" (B4, rebuild r13).
+   Ditulis FRESH dari API.md §10 + laporan juri buta r12.
+   Panel MELAYANG: tidak ada satu pun elemen selebar layar (kecuali root
+   #hud dan overlay #map-overlay yang memang wadah penuh layar). */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0b0f14;
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: #eef2f6;
+}
+
+#game {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+#game canvas { display: block; }
+
+/* ---------- HUD root (satu-satunya wadah penuh layar) ---------- */
+#hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  font-size: 12px;
+  line-height: 1.35;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.hud-panel {
+  background: rgba(8, 13, 20, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.hud-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: #9fb0c0;
+  margin-right: 6px;
+}
+
+.hud-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ---------- Kiri-atas: status ---------- */
+#hud-tl {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 250px;
+}
+.hud-title-row {
+  margin-top: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.hud-game {
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: #ffb347;
+  font-size: 13px;
+}
+.hud-clock {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #eef2f6;
+}
+.hud-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.hud-bar-row .hud-label { width: 44px; margin-right: 0; }
+.hud-bar {
+  flex: 1;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.hud-fill { height: 100%; border-radius: 4px; }
+.hud-health { background: #4ade80; }
+.hud-armor { background: #60a5fa; }
+.hud-num {
+  width: 26px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.hud-vehicle { color: #eef2f6; font-weight: 600; }
+.hud-rep { color: #fbbf24; font-weight: 600; }
+
+/* ---------- Kanan-atas: wanted + cash ---------- */
+#hud-tr {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 168px;
+  text-align: right;
+}
+.hud-stars {
+  color: #fbbf24;
+  font-size: 18px;
+  letter-spacing: 2px;
+  line-height: 1.1;
+}
+.hud-sight {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  border-radius: 4px;
+}
+.hud-tr-row { justify-content: flex-end; }
+.hud-cash {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #4ade80;
+}
+.hud-speed { color: #eef2f6; font-variant-numeric: tabular-nums; }
+
+/* ---------- Kiri-bawah: misi + crew (kolom, berlabuh di bawah) ---------- */
+#hud-bl {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#hud-mission { width: 100%; box-sizing: border-box; }
+.hud-m-name {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #ffb347;
+  font-size: 14px;
+}
+.hud-m-grid {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+}
+.hud-m-cell { display: flex; flex-direction: column; }
+.hud-m-cell span:last-child {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.hud-m-next, .hud-m-gps { margin-top: 6px; }
+.hud-m-next span:last-child, .hud-m-gps span:last-child { font-weight: 600; }
+#hud-m-gps { color: #fca5a5; }
+#hud-crew { width: 100%; box-sizing: border-box; }
+.hud-crew-title {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #9fb0c0;
+  font-weight: 700;
+}
+.hud-crew-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+}
+.hud-crew-name { font-weight: 600; }
+.hud-crew-role { color: #ffb347; font-weight: 700; font-size: 11px; }
+
+/* ---------- Kanan-bawah: minimap + radio ---------- */
+#hud-br {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+#hud-minimap-wrap {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  background: #0e1a24;
+}
+#hud-minimap { display: block; width: 200px; height: 200px; }
+.hud-minimap-n {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+#hud-radio {
+  width: 200px;
+  box-sizing: border-box;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+#hud-radio-name { font-weight: 800; color: #ffb347; }
+.hud-radio-hint { color: #9fb0c0; font-size: 10px; }
+
+/* ---------- Banner PAUSED (disembunyikan saat staging) ---------- */
+.hud-paused {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 10px 28px;
+  background: rgba(8, 13, 20, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.3em;
+  color: #ffffff;
+}
+
+/* ---------- Peta penuh (overlay modal) ---------- */
+#map-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.82);
+}
+#map-panel {
+  width: 1120px;
+  max-width: 94vw;
+  max-height: 96vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #0b1220;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+#map-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+#map-title {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: #ffb347;
+}
+#map-sub { color: #9fb0c0; font-size: 12px; }
+#map-body {
+  display: flex;
+  gap: 14px;
+  margin-top: 12px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+#map-canvas {
+  flex: 1;
+  width: 100%;
+  max-width: 920px;
+  height: auto;
+  border-radius: 8px;
+  background: #0d1620;
+}
+#map-legend {
+  width: 180px;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 8px;
+  padding: 10px 12px;
+  height: fit-content;
+}
+.map-legend-title {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #9fb0c0;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.map-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.map-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+.map-dot-you { background: #22d3ee; }
+.map-dot-obj { background: #ef4444; border-radius: 2px; transform: rotate(45deg); }
+.map-dot-active { background: #ffb347; }
+.map-dot-done { background: #4ade80; }
+.map-dot-locked { background: #6b7280; }
+.map-dot-bank { background: #fbbf24; border-radius: 2px; }
+.map-dot-shop { background: #a78bfa; border-radius: 2px; }
+.map-dot-safe { background: #60a5fa; border-radius: 2px; }
+.map-dot-police { background: #1e3a8a; }
+#map-footer {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 13px;
+}
+#map-gps { color: #fca5a5; font-weight: 600; margin-left: 4px; }

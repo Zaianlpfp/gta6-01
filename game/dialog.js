@@ -1,100 +1,105 @@
-/* dialog.js — dialog + potret karakter "Solmar Bay" (gta6-01, rebuild r12).
-   Kontrak: game/API.md §9. say() INSTAN (tanpa typewriter) di #dlg
-   KIRI-BAWAH (wheel kanan-bawah — jangan menimpa). show() = say + pause.
-   Jangan tumpuk 2 show() berurutan: show() mengganti isi yang sama. */
+// game/dialog.js — SB.dialog: dialog + potret (r13, ditulis fresh dari API.md §9).
+// Tampil INSTAN (tanpa typewriter): teks ditulis ke DOM dalam satu operasi.
+// #dlg di KIRI-BAWAH; wheel kanan-bawah — jangan menimpa.
 (function () {
-  var SB = window.SB;
-  var S = SB.state || (SB.state = {});
+  'use strict';
 
-  var D = SB.dialog = SB.dialog || {};
+  var SB = window.SB || (window.SB = {});
 
-  D.contacts = {
-    mara:   { name: 'Mara Solis',    role: 'Fixer',          img: 'assets/mara.jpg' },
-    jax:    { name: 'Jax',           role: 'Mechanic',       img: 'assets/jax.jpg' },
-    lucia:  { name: 'Lucia Ortega',  role: 'Getaway Driver', img: 'assets/lucia.jpg' }
+  var PORTRAITS = {
+    mara: 'game/assets/mara.jpg',
+    'mara solis': 'game/assets/mara.jpg',
+    jax: 'game/assets/jax.jpg',
+    lucia: 'game/assets/lucia.jpg',
+    'lucia ortega': 'game/assets/lucia.jpg'
   };
 
-  /* Satu kalimat per misi, dipakai staging / briefing. */
-  D.lines = {
-    1: { who: 'mara', text: 'Penumpang sudah menunggu di Deco Row. Antar dia sampai tujuan, jangan bikin ribut.' },
-    2: { who: 'mara', text: 'Paket ini harus sampai Marina sebelum malam. Saltjack mengincarnya — hati-hati.' },
-    3: { who: 'jax',  text: 'Comet GT itu parkir di Downtown. Bawa ke bengkelku, jangan sampai penyok.' },
-    4: { who: 'lucia', text: 'Tiga checkpoint, satu malam. Ikuti jalanku dan jangan sentuh rem di tikungan.' },
-    5: { who: 'jax',  text: 'Dua mobil, satu chop shop. Mesin dingin, tangan cepat, mulut diam.' },
-    6: { who: 'lucia', text: 'Pelabuhan sudah panas. Kita lewat Marina, lampu mati, gas penuh.' },
-    7: { who: 'mara', text: 'Polisi sudah di ekormu. Lepas mereka, lalu sembunyi di safehouse.' },
-    8: { who: 'mara', text: 'Solmar National Bank. Ini pekerjaan besar — sekali jalan, tidak ada jalan pulang.' }
-  };
-
-  D.last = null;
-  D._pausedByDialog = false;
-
-  function el() {
-    if (typeof document === 'undefined') return null;
-    var d = document.getElementById('dlg');
-    if (d) return d;
-    d = document.createElement('div');
-    d.id = 'dlg';
-    d.style.cssText = 'position:fixed;left:16px;bottom:16px;z-index:40;' +
-      'max-width:420px;display:none;background:rgba(10,12,20,0.82);' +
-      'border:1px solid rgba(255,255,255,0.18);border-radius:10px;' +
-      'color:#fff;font-family:system-ui,sans-serif;padding:10px 12px;';
-    if (document.body) document.body.appendChild(d);
-    return d;
-  }
-
-  function resolve(who, role, img) {
-    var c = D.contacts[who];
-    if (c) return { name: c.name, role: role || c.role, img: img || c.img };
-    return { name: who || '???', role: role || '', img: img || '' };
-  }
+  var dlgEl = null;
+  var showing = false;
 
   function esc(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 
-  /* Tampil INSTAN (tanpa typewriter). Tidak mengubah pause. */
+  function pickPortrait(who, img) {
+    if (img) return img;
+    var key = String(who || '').toLowerCase();
+    if (PORTRAITS[key]) return PORTRAITS[key];
+    if (key.indexOf('mara') !== -1) return PORTRAITS.mara;
+    if (key.indexOf('jax') !== -1) return PORTRAITS.jax;
+    if (key.indexOf('lucia') !== -1) return PORTRAITS.lucia;
+    return '';
+  }
+
+  // Pakai #dlg yang sudah ada (dibuat hud/index) bila ada; kalau belum ada,
+  // buat sendiri dengan gaya inline kiri-bawah.
+  function ensureDlg() {
+    if (typeof document === 'undefined') return null;
+    var el = document.getElementById('dlg');
+    if (el) { dlgEl = el; return el; }
+    if (dlgEl) return dlgEl;
+    dlgEl = document.createElement('div');
+    dlgEl.id = 'dlg';
+    dlgEl.style.position = 'fixed';
+    dlgEl.style.left = '12px';
+    dlgEl.style.bottom = '12px';
+    dlgEl.style.zIndex = '60';
+    dlgEl.style.display = 'none';
+    dlgEl.style.maxWidth = '420px';
+    dlgEl.style.background = 'rgba(10,12,20,0.88)';
+    dlgEl.style.border = '1px solid rgba(255,255,255,0.25)';
+    dlgEl.style.borderRadius = '10px';
+    dlgEl.style.padding = '10px 12px';
+    dlgEl.style.color = '#ffffff';
+    dlgEl.style.fontFamily = 'system-ui, sans-serif';
+    dlgEl.style.fontSize = '14px';
+    dlgEl.style.lineHeight = '1.45';
+    if (document.body) document.body.appendChild(dlgEl);
+    return dlgEl;
+  }
+
+  var D = SB.dialog || (SB.dialog = {});
+
+  // Tampil INSTAN di #dlg kiri-bawah. Dipakai staging.
+  // Satu penugasan innerHTML: seluruh teks langsung ada, tanpa typewriter.
   D.say = function (who, role, text, img) {
-    var c = resolve(who, role, img);
-    D.last = { who: c.name, role: c.role, text: text };
-    var box = el();
-    if (box) {
-      var pic = c.img ? '<img src="' + esc(c.img) + '" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px;float:left;margin-right:10px;">' : '';
-      box.innerHTML = pic +
-        '<div><b>' + esc(c.name) + '</b>' +
-        (c.role ? ' <span style="opacity:0.7;font-size:12px;">· ' + esc(c.role) + '</span>' : '') +
-        '<div style="margin-top:4px;font-size:14px;line-height:1.45;">' + esc(text) + '</div></div>' +
-        '<div style="clear:both;"></div>';
-      box.style.display = 'block';
+    var el = ensureDlg();
+    if (!el) return false;
+    var src = pickPortrait(who, img);
+    var html = '';
+    if (src) {
+      html += '<img src="' + esc(src) + '" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px;float:left;margin-right:10px;">';
     }
+    html += '<div><strong>' + esc(who) + '</strong>';
+    if (role) html += ' <span style="opacity:0.7">· ' + esc(role) + '</span>';
+    html += '<div>' + esc(text) + '</div></div>';
+    el.innerHTML = html;
+    el.style.display = 'block';
+    showing = true;
     return true;
   };
 
-  /* Tampil + pause game. Mengganti dialog yang sedang tampil (tidak menumpuk). */
+  // Tampil + set SB.state.paused = true.
+  // JANGAN tumpuk 2 show() berurutan: say() menimpa isi, bukan menumpuk.
   D.show = function (who, role, text, img) {
     D.say(who, role, text, img);
-    S.paused = true;
-    D._pausedByDialog = true;
+    if (SB.state) SB.state.paused = true;
     return true;
   };
 
+  // Sembunyikan dialog + lanjutkan game.
   D.hide = function () {
-    var box = el();
-    if (box) box.style.display = 'none';
-    D.last = null;
-    if (D._pausedByDialog) {
-      S.paused = false;
-      D._pausedByDialog = false;
-    }
+    var el = ensureDlg();
+    if (el) el.style.display = 'none';
+    showing = false;
+    if (SB.state) SB.state.paused = false;
     return true;
   };
 
-  /* Baris briefing misi (tanpa pause) — dipakai staging / start misi. */
-  D.brief = function (id) {
-    var line = D.lines[id];
-    if (!line) return false;
-    return D.say(line.who, null, line.text);
-  };
+  D.isShowing = function () { return showing; };
 
-  D.sayMission = D.brief;
 })();

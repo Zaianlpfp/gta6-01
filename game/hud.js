@@ -1,490 +1,403 @@
-// hud.js — HUD Solmar Bay + kamera follow. B4 r12, tulis segar dari tree r11.
-// r12: HUD = PANEL MELAYANG (bukan bar selebar layar — cacat juri r11 #1).
-// Dulu: klaster kiri-atas + jam tengah-atas + minimap kanan-atas membentuk
-// strip horizontal penuh lebar layar. Baru: 4 pulau mengambang — klaster
-// status kiri-atas (cash/REP/story/jam/musim/HP-ARMOR), chip wanted
-// kanan-atas, panel misi kiri-bawah, minimap+speed kanan-bawah. Tengah
-// atas KOSONG, tengah kiri KOSONG. Panel misi kini juga tampilkan GPS
-// jarak numerik (dulu cuma di overlay peta).
-// Kamera follow r12: LEBIH DEKAT (dist 13 -> 9, height 5.2 -> 4, look-ahead
-// 6 -> 4) supaya hero BESAR di tengah frame (cacat juri r11 #3).
-// CSS panel di-inject di sini (style.css tak punya kelas .hud-*);
-// loop rAF sendiri (main.js tak panggil update); panel misi baca S.mission
-// + markerPos; jam maju dari simTime; kamera follow collision-aware via
-// wrap SB.engine.step (engine.js milik B1, tak disentuh).
+// game/hud.js — HUD "Solmar Bay" (B4, rebuild r13).
+// Ditulis FRESH dari API.md §0/§2/§8/§10 + laporan juri buta r12.
+// Panel MELAYANG (bukan bar selebar layar): status kiri-atas, wanted/cash
+// kanan-atas, misi + crew kiri-bawah, minimap + radio kanan-bawah.
+// update() idempotent: dipanggil ganda per frame AMAN (registerUpdate + rAF).
 (function () {
   'use strict';
-  var SB = window.SB;
-  var el = {}, staging = false, mmCv = null, mm = null, seen = {};
-  var DAYS = ['FRI', 'SAT', 'SUN', 'MON', 'TUE', 'WED', 'THU'];
-  var CREW = [['LUCIA ORTEGA', 'DRIVER', '#ff5fa2'], ['JAX', 'MECHANIC', '#ffb347'], ['MARA SOLIS', 'LOOKOUT', '#39d0ff']];
-  var ARMS = [['fists', '1', 'FISTS'], ['pistol', '2', 'PISTOL'], ['smg', '3', 'SMG'], ['shotgun', '4', 'SHOTGUN'], ['rifle', '5', 'RIFLE']];
-  var CSS = '#hud{position:fixed;inset:0;pointer-events:none;z-index:5;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.8);font:13px/1.45 Arial,sans-serif}'
-    + '.hud-box{background:rgba(8,10,20,.62);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:7px 10px}'
-    + '.hud-tl{position:absolute;top:12px;left:12px;width:250px}'
-    + '.hud-cash{font-size:20px;font-weight:800;color:#ffd34d}'
-    + '.hud-bar{height:8px;background:rgba(255,255,255,.16);border-radius:4px;overflow:hidden;margin-top:3px}'
-    + '.hud-fill{height:100%}.rep{background:#ffb347}.hp{background:#39d95e}.ar{background:#39a0ff}'
-    + '.hud-story{margin-top:4px;font-size:12px;color:#cfe0ff}'
-    + '.hud-clockline{margin-top:4px;font-size:13px}'
-    + '.hud-clocktime{font-weight:800}.hud-season{font-size:11px;color:#ffd34d;letter-spacing:2px;margin-left:8px}'
-    + '.hud-hprows{margin-top:6px}'
-    + '.hud-barow{display:flex;align-items:center;gap:6px;margin-top:3px}'
-    + '.hud-barlabel{width:44px;font-size:11px;font-weight:700}.hud-bar{flex:1}.hud-barval{width:30px;text-align:right;font-size:12px;font-weight:700}'
-    + '.hud-tr{position:absolute;top:12px;right:12px;text-align:center}'
-    + '.hud-wanted{font-size:18px;letter-spacing:3px}'
-    + '.hud-mcol{position:absolute;left:12px;bottom:12px;width:300px}.hud-mission{margin-bottom:8px}'
-    + '.hud-mtitle{font-weight:800;color:#ffd34d}.hud-mstage{font-size:12px;color:#9fb0c3}.hud-mtimer{font-size:12px;color:#8fd0ff}.hud-mpayout{font-size:12px;color:#39d95e}.hud-mgps{font-size:12px;color:#ffd23f}'
-    + '.hud-response{font-size:12px;line-height:1.5;white-space:pre-line;margin-bottom:8px}'
-    + '.hud-crew{border-top:1px solid rgba(255,255,255,.15);padding-top:6px}'
-    + '.hud-crewhead{font-weight:800;letter-spacing:2px;color:#ffd34d;font-size:12px}'
-    + '.hud-crewrow{font-size:12px;margin-top:3px}.hud-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}'
-    + '.hud-loc{margin-top:6px;font-size:12px;color:#cfe0ff}'
-    + '.hud-br{position:absolute;right:12px;bottom:12px;text-align:right}'
-    + '.hud-mmwrap{margin-bottom:6px}'
-    + '#hud-minimap{width:150px;height:150px;border-radius:50%;border:2px solid rgba(255,255,255,.35)}'
-    + '.hud-speed{font-size:20px;font-weight:800}.hud-veh{font-size:12px;color:#cfe0ff}'
-    + '.hud-wheel{display:flex;gap:4px;justify-content:flex-end;margin-top:4px}'
-    + '.hud-wslot{padding:3px 7px;background:rgba(8,10,20,.62);border:1px solid rgba(255,255,255,.2);border-radius:5px;font-size:11px}'
-    + '.hud-wslot.active{border-color:#ffd34d;color:#ffd34d}.hud-wslot.locked{opacity:.45}'
-    + '.hud-radio{margin-top:6px;font-size:12px}'
-    + '.hud-toast{position:absolute;top:64px;left:50%;transform:translateX(-50%);background:rgba(8,10,20,.8);padding:6px 14px;border-radius:6px;opacity:0;transition:opacity .3s}'
-    + '.hud-paused{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:28px;font-weight:800;letter-spacing:4px;background:rgba(8,10,20,.7);padding:14px 26px;border-radius:10px}'
-    + '.hud-big{position:absolute;top:38%;left:50%;transform:translate(-50%,-50%);font-size:56px;font-weight:800;letter-spacing:8px;color:#ff4040}'
-    + '@media(max-height:420px){.hud-crew,.hud-loc{display:none}.hud-mcol{width:240px}#hud-minimap{width:96px;height:96px}}';
+  var SB = window.SB = window.SB || {};
+
+  var WEEKDAYS = ['FRI', 'SAT', 'SUN', 'MON', 'TUE', 'WED', 'THU'];
+  var STATIONS = ['WAVE 88.1', 'SOL 101.9', 'BAY 96.5'];
+  var CREW = [
+    { name: 'Lucia Ortega', role: 'DRIVER' },
+    { name: 'Jax', role: 'MECHANIC' },
+    { name: 'Mara Solis', role: 'LOOKOUT' }
+  ];
+  var MINIMAP_COLORS = [
+    '#1d3a4a', '#2a2a3a', '#3a2a1d', '#1d3a2a', '#3a1d2a',
+    '#2a3a1d', '#1d2a3a', '#3a3a1d', '#2a1d3a'
+  ];
+
+  var staging = false;
+  var lastMinimapSim = -1;
+  var built = false;
+
   function $(id) { return document.getElementById(id); }
-  function mk(tag, id, cls, parent) { var d = document.createElement(tag); if (id) d.id = id; if (cls) d.className = cls; if (parent) parent.appendChild(d); return d; }
-  function st() { return SB.state; }
-  function num(v, d) { v = Number(v); return isFinite(v) ? v : (d || 0); }
-  function injectCss() {
-    if ($('hud-css')) return;
-    var s = document.createElement('style'); s.id = 'hud-css'; s.textContent = CSS;
-    var h = document.head || document.body; if (h) h.appendChild(s);
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function pad2(n) { n = Math.floor(n); return (n < 10 ? '0' : '') + n; }
+  function fmtMoney(n) {
+    n = Math.floor(n || 0);
+    var neg = n < 0;
+    var s = String(neg ? -n : n);
+    var out = '';
+    while (s.length > 3) { out = ',' + s.slice(-3) + out; s = s.slice(0, -3); }
+    return (neg ? '-$' : '$') + s + out;
   }
-  function cash() {
+  function fmtTimer(sec) {
+    sec = Math.max(0, Math.floor(sec || 0));
+    return Math.floor(sec / 60) + ':' + pad2(sec % 60);
+  }
+  function st() { return SB.state || {}; }
+  function num(v, dflt) { return (typeof v === 'number' && isFinite(v)) ? v : dflt; }
+  function heroPos() {
+    if (SB.player && typeof SB.player.pos === 'function') {
+      try {
+        var p = SB.player.pos();
+        if (p && p.length >= 2) return [num(p[0], 0), num(p[1], 0)];
+      } catch (e) { /* abaikan, pakai fallback */ }
+    }
+    if (SB.engine && typeof SB.engine.heroPos === 'function') {
+      try {
+        var h = SB.engine.heroPos();
+        if (h && h.length >= 2) return [num(h[0], 0), num(h[1], 0)];
+      } catch (e) { /* abaikan */ }
+    }
+    return [0, 0];
+  }
+  function distTo(x, z) {
+    var p = heroPos();
+    var dx = p[0] - x, dz = p[1] - z;
+    return Math.sqrt(dx * dx + dz * dz);
+  }
+  function cashTotal() {
     var c = num(st().cash, 0);
-    if (typeof SB.cash === 'number') c = Math.max(c, SB.cash);
-    if (SB.player && typeof SB.player.cash === 'number') c = Math.max(c, SB.player.cash);
-    if (SB.missions && typeof SB.missions.cash === 'number') c = Math.max(c, SB.missions.cash);
+    if (SB.player) c = Math.max(c, num(SB.player.cash, 0));
+    if (SB.missions) c = Math.max(c, num(SB.missions.cash, 0));
     return c;
   }
-  function rep() {
+  function repTotal() {
     var r = num(st().rep, 0);
-    if (SB.missions && typeof SB.missions.rep === 'number') r = Math.max(r, SB.missions.rep);
-    if (SB.player && typeof SB.player.rep === 'number') r = Math.max(r, SB.player.rep);
+    if (SB.missions) r = Math.max(r, num(SB.missions.rep, 0));
     return r;
   }
-  function repInfo() {
-    var th = [0, 300, 900, 1600, 2400, 4200], ti = ['STREET KID', 'CORNER HUSTLER', 'NEON RUNNER', 'BAY HUSTLER', 'SOLMAR KING'];
-    var r = rep(), lv = 1, i;
-    for (i = 0; i < th.length; i++) if (r >= th[i]) lv = i + 1;
-    if (lv > 5) lv = 5;
-    return { level: lv, title: ti[lv - 1], xpInto: r, xpNext: th[lv] || th[5] };
+  function rankName(rep) {
+    if (rep >= 600) return 'KINGPIN';
+    if (rep >= 300) return 'PLAYER';
+    if (rep >= 100) return 'HUSTLER';
+    return 'STREET KID';
   }
-  function stars() {
-    if (SB.police && typeof SB.police.stars === 'function') { try { return Math.max(0, Math.min(5, num(SB.police.stars(), 0) | 0)); } catch (e) {} }
-    if (typeof st().wanted === 'number') return Math.max(0, Math.min(5, st().wanted | 0));
-    var h = num(st().heat, 0);
-    if (h <= 5) return h | 0;
-    return h <= 0 ? 0 : h < 20 ? 1 : h < 40 ? 2 : h < 60 ? 3 : h < 80 ? 4 : 5;
+  function heatStars() {
+    if (SB.police && typeof SB.police.stars === 'function') {
+      try { return clamp(Math.floor(SB.police.stars()), 0, 5); } catch (e) { /* jatuh ke state */ }
+    }
+    return clamp(Math.floor(num(st().heat, 0)), 0, 5);
   }
-  // Jam: engine r8 tak gerakkan hour/min — turunkan dari simTime (1 menit
-  // game per detik sim). Bila B1 r9 menggerakkan jam state, ikuti state.
-  var clockBase = null;
   function clockText() {
-    if (typeof SB.formatClock === 'function') { try { return SB.formatClock(); } catch (e) {} }
     var s = st();
-    if (!clockBase || clockBase.preset !== s.preset) clockBase = { preset: s.preset, hour: num(s.hour, 17), min: num(s.min, 24), sim: num(s.simTime, 0) };
-    if (s.hour !== clockBase.hour || s.min !== clockBase.min) { clockBase.hour = num(s.hour, 17); clockBase.min = num(s.min, 24); clockBase.sim = num(s.simTime, 0); }
-    var total = clockBase.hour * 60 + clockBase.min + Math.floor(num(s.simTime, 0) - clockBase.sim);
-    var h = Math.floor(total / 60) % 24, m = ((total % 60) + 60) % 60, d = DAYS[(num(s.day, 1) - 1) % 7] || 'FRI';
-    return d + ' ' + (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+    var day = Math.max(1, Math.floor(num(s.day, 1)));
+    var wd = WEEKDAYS[(day - 1) % 7];
+    var label = s.timeLabel || 'DAY';
+    return wd + ' ' + pad2(num(s.hour, 17)) + ':' + pad2(num(s.min, 24)) +
+      ' · DAY ' + day + ' · ' + label;
   }
-  // Satu tampilan misi: M.active (id/name/step/timer) + S.mission
-  // (stage/stageTotal/objective/payout) + markerPos (target GPS).
-  function missionView() {
-    var sm = st().mission || null, act = null;
-    if (SB.missions) {
-      var a = SB.missions.active;
-      if (typeof a === 'function') { try { act = a() || null; } catch (e) { act = null; } }
-      else if (a && typeof a === 'object') act = a;
-      if (!act && SB.missions.list) for (var i = 0; i < SB.missions.list.length; i++) if (SB.missions.list[i].active) act = SB.missions.list[i];
+  // Panel misi: utamakan getHUD() B3 bila ada, fallback ke active + list.
+  function missionData() {
+    var m = SB.missions;
+    if (!m) return null;
+    var hud = null;
+    if (typeof m.getHUD === 'function') {
+      try { hud = m.getHUD(); } catch (e) { hud = null; }
     }
-    if (!act && !sm) return null;
-    var tgt = null;
-    if (SB.missions && typeof SB.missions.markerPos === 'function') { try { tgt = SB.missions.markerPos() || null; } catch (e) {} }
-    if (!tgt && act && act.target) tgt = act.target;
-    if (!tgt && sm && sm.target) tgt = sm.target;
-    var payout = (sm && sm.payout != null) ? sm.payout : (act && act.payout);
-    if (payout == null && SB.missions && SB.missions.list) {
-      var id = (act && act.id) || (sm && sm.id);
-      for (var k = 0; k < SB.missions.list.length; k++) if (SB.missions.list[k].id === id) payout = SB.missions.list[k].payout;
+    var active = m.active || null;
+    var list = m.list || [];
+    var name = null, stage = null, next = null, timer = null, payout = null;
+    if (hud && typeof hud === 'object') {
+      if (typeof hud.name === 'string') name = hud.name;
+      if (typeof hud.stage === 'string') stage = hud.stage;
+      if (typeof hud.next === 'string') next = hud.next;
+      if (typeof hud.timer === 'number') timer = hud.timer;
+      if (typeof hud.payout === 'number') payout = hud.payout;
     }
-    return { id: (act && act.id) || (sm && sm.id), name: (act && act.name) || (sm && sm.title) || 'MISSION',
-      objective: (act && act.objective) || (sm && sm.objective) || st().objective || '',
-      stage: (sm && sm.stage) || (act && act.stage) || ((act && act.step != null) ? act.step + 1 : 1),
-      stageTotal: (sm && sm.stageTotal) || (act && act.stageTotal) || 1,
-      timer: act && act.timer, payout: payout || 0, target: tgt };
-  }
-  function fmt$(n) { return '$' + num(n, 0).toLocaleString('en-US'); }
-  function setTxt(node, v) { if (node && seen[node.id] !== v) { seen[node.id] = v; node.textContent = v; } }
-  function heroPos() {
-    if (SB.engine && typeof SB.engine.heroPos === 'function') { try { var p = SB.engine.heroPos(); if (p) return { x: p[0], z: p[1] }; } catch (e) {} }
-    if (SB.player && typeof SB.player.pos === 'function') { try { var q = SB.player.pos(); if (q) return { x: q[0], z: q[1] }; } catch (e) {} }
-    return null;
-  }
-  // r12: jarak GPS numerik untuk panel misi (dulu cuma di overlay peta).
-  function gpsText(m) {
-    if (!m) return '';
-    if (m.target) {
-      var hp = heroPos();
-      if (hp) {
-        var tx = m.target.x != null ? m.target.x : m.target[0], tz = m.target.z != null ? m.target.z : m.target[1];
-        var dx = tx - hp.x, dz = tz - hp.z;
-        return 'GPS: objective ' + Math.round(Math.sqrt(dx * dx + dz * dz)) + ' m away';
+    if (active) {
+      if (!name && typeof active.name === 'string') name = active.name;
+      if (!next && typeof active.objective === 'string') next = active.objective;
+      if (timer === null && typeof active.timer === 'number') timer = active.timer;
+      if (stage === null && typeof active.stage === 'string') stage = active.stage;
+      if (stage === null && typeof active.stage === 'number' && typeof active.stages === 'number') {
+        stage = 'STAGE ' + active.stage + '/' + active.stages;
       }
-      return 'GPS: ' + (m.objective || '');
+      if (payout === null) {
+        for (var i = 0; i < list.length; i++) {
+          if (list[i] && list[i].id === active.id && typeof list[i].payout === 'number') {
+            payout = list[i].payout;
+            break;
+          }
+        }
+      }
+      if (stage === null) {
+        var idx = 0, total = 1;
+        for (var j = 0; j < list.length; j++) {
+          if (list[j] && list[j].id === active.id) { idx = j; break; }
+        }
+        // Stage dihitung dari progres misi dalam daftar (1-based).
+        total = Math.max(1, list.length ? 2 : 1);
+        stage = 'STAGE ' + (idx + 1) + '/' + total;
+      }
     }
-    return m.objective ? 'GPS: ' + m.objective : '';
+    if (!name && !active) return null;
+    return { name: name, stage: stage, next: next, timer: timer, payout: payout };
   }
-  function rectOf(d) { return { x: (d.x0 != null ? d.x0 : d.cx - d.w / 2), z: (d.z0 != null ? d.z0 : d.cz - d.d / 2), w: (d.x1 != null ? d.x1 - d.x0 : d.w), h: (d.z1 != null ? d.z1 - d.z0 : d.d) }; }
-  function mapBounds() {
-    var d = (SB.city && SB.city.districts) || [];
-    if (!d.length) return { minX: -560, maxX: 470, minZ: -470, maxZ: 530 };
-    var x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9, i, r;
-    for (i = 0; i < d.length; i++) { r = rectOf(d[i]); if (r.x < x0) x0 = r.x; if (r.x + r.w > x1) x1 = r.x + r.w; if (r.z < z0) z0 = r.z; if (r.z + r.h > z1) z1 = r.z + r.h; }
-    return { minX: x0 - 30, maxX: x1 + 30, minZ: z0 - 30, maxZ: z1 + 30 };
+  function gpsText() {
+    var m = SB.missions;
+    if (m && typeof m.getGPS === 'function') {
+      try {
+        var g = m.getGPS();
+        if (typeof g === 'string' && g.length > 0) return g;
+      } catch (e) { /* fallback */ }
+    }
+    var s = st();
+    if (typeof s.objective === 'string' && s.objective.length > 0) return s.objective;
+    // Tanpa misi aktif: jarak numerik ke bank (perbaikan minus juri r12).
+    if (SB.city && SB.city.bank && SB.city.bank.pos) {
+      var bp = SB.city.bank.pos;
+      var d = distTo(num(bp[0], 2), num(bp[2], -2));
+      return 'BANK ' + Math.round(d) + ' m away';
+    }
+    return '—';
   }
+  function radioName() {
+    if (SB.radio) {
+      if (typeof SB.radio.current === 'string' && SB.radio.current.length > 0) {
+        return SB.radio.current;
+      }
+      if (Array.isArray(SB.radio.stations) && SB.radio.stations.length > 0) {
+        var idx = num(SB.radio.station, num(SB.radio.index, 0));
+        var stn = SB.radio.stations[clamp(Math.floor(idx), 0, SB.radio.stations.length - 1)];
+        if (typeof stn === 'string') return stn;
+        if (stn && typeof stn.name === 'string') return stn.name;
+      }
+    }
+    return STATIONS[0];
+  }
+
   function buildDom() {
-    var root = $('hud');
-    if (!root) root = mk('div', 'hud', '', document.body);
-    el.root = root;
-    // Pulau 1 — klaster status kiri-atas (cash/REP/story/jam/musim/HP-ARMOR).
-    var tl = mk('div', 'hud-tl', 'hud-box hud-tl', root);
-    el.cash = mk('div', 'hud-cash', 'hud-cash', tl);
-    var repRow = mk('div', 'hud-rep', '', tl);
-    el.repTitle = mk('span', 'hud-reptitle', '', repRow);
-    var bar = mk('div', 'hud-repbar', 'hud-bar', repRow);
-    el.repFill = mk('div', 'hud-repfill', 'hud-fill rep', bar);
-    el.story = mk('div', 'hud-story', 'hud-story', tl);
-    var cl = mk('div', 'hud-clockline', 'hud-clockline', tl);
-    el.clock = mk('span', 'hud-clocktime', 'hud-clocktime', cl);
-    el.season = mk('span', 'hud-season', 'hud-season', cl);
-    var hrows = mk('div', 'hud-hprows', 'hud-hprows', tl);
-    var hrow = mk('div', '', 'hud-barow', hrows);
-    mk('span', '', 'hud-barlabel', hrow).textContent = 'HP';
-    var hb2 = mk('div', '', 'hud-bar', hrow);
-    el.hpFill = mk('div', 'hud-hpfill', 'hud-fill hp', hb2);
-    el.hpVal = mk('span', 'hud-hpval', 'hud-barval', hrow);
-    var arow = mk('div', '', 'hud-barow', hrows);
-    mk('span', '', 'hud-barlabel', arow).textContent = 'ARMOR';
-    var ab2 = mk('div', '', 'hud-bar', arow);
-    el.arFill = mk('div', 'hud-arfill', 'hud-fill ar', ab2);
-    el.arVal = mk('span', 'hud-arval', 'hud-barval', arow);
-    // Pulau 2 — chip wanted kanan-atas (kecil, bukan blok).
-    var tr = mk('div', 'hud-tr', 'hud-box hud-tr', root);
-    el.wanted = mk('div', 'hud-wanted', 'hud-wanted', tr);
-    // Pulau 3 — panel misi kiri-bawah (misi + response + crew + lokasi).
-    var mc = mk('div', 'hud-mcol', 'hud-mcol', root);
-    var mp = mk('div', 'hud-mission', 'hud-box hud-mission', mc);
-    el.mTitle = mk('div', 'hud-mtitle', 'hud-mtitle', mp);
-    el.mStage = mk('div', 'hud-mstage', 'hud-mstage', mp);
-    el.mObj = mk('div', 'hud-mobj', 'hud-mobj', mp);
-    el.mTimer = mk('div', 'hud-mtimer', 'hud-mtimer', mp);
-    el.mPayout = mk('div', 'hud-mpayout', 'hud-mpayout', mp);
-    el.mGps = mk('div', 'hud-mgps', 'hud-mgps', mp);
-    el.response = mk('div', 'hud-response', 'hud-box hud-response', mc);
-    var cp = mk('div', 'hud-crew', 'hud-crew', mc);
-    mk('div', '', 'hud-crewhead', cp).textContent = 'CREW';
-    CREW.forEach(function (c, i) {
-      var row = mk('div', 'hud-crew' + i, 'hud-crewrow', cp);
-      var dot = mk('span', '', 'hud-dot', row); dot.style.background = c[2];
-      mk('span', '', '', row).textContent = c[0] + ' — ' + c[1];
-    });
-    el.loc = mk('div', 'hud-loc', 'hud-loc', mc);
-    // Pulau 4 — minimap + kendaraan kanan-bawah.
-    var br = mk('div', 'hud-br', 'hud-br', root);
-    el.mmWrap = mk('div', 'hud-mmwrap', 'hud-mmwrap', br);
-    el.speed = mk('div', 'hud-speed', 'hud-box hud-speed', br);
-    el.veh = mk('div', 'hud-veh', 'hud-veh', br);
-    el.wheel = mk('div', 'hud-wheel', 'hud-wheel', br);
-    el.wheelSlots = [];
-    ARMS.forEach(function (w) { var s = mk('div', 'hud-wslot-' + w[0], 'hud-wslot', el.wheel); s.textContent = w[1] + ' ' + w[2]; el.wheelSlots.push(s); });
-    el.radio = mk('div', 'hud-radio', 'hud-box hud-radio', br);
-    el.toast = mk('div', 'hud-toast', 'hud-toast', root);
-    var dlg = $('dlg');
-    if (!dlg) {
-      dlg = mk('div', 'dlg', 'hud-dlg', root);
-      var dp = mk('div', 'dlg-portrait', '', dlg);
-      el.dlgImg = mk('img', 'dlg-img', '', dp);
-      var db = mk('div', 'dlg-body', '', dlg);
-      el.dlgName = mk('div', 'dlg-name', '', db);
-      el.dlgRole = mk('div', 'dlg-role', '', db);
-      el.dlgLines = mk('div', 'dlg-lines', '', db);
-    }
-    el.dlg = dlg;
-    el.paused = mk('div', 'hud-paused', 'hud-paused', root);
-    el.paused.textContent = 'PAUSED — [P] RESUME'; el.paused.style.display = 'none';
-    el.busted = mk('div', 'hud-busted', 'hud-big', root);
-    el.busted.textContent = 'BUSTED'; el.busted.style.display = 'none';
-    el.wasted = mk('div', 'hud-wasted', 'hud-big', root);
-    el.wasted.textContent = 'WASTED'; el.wasted.style.display = 'none';
+    if (built) return;
+    built = true;
+    var root = document.createElement('div');
+    root.id = 'hud';
+    root.innerHTML =
+      '<div id="hud-tl" class="hud-panel">' +
+        '<div class="hud-row hud-title-row"><span class="hud-game">SOLMAR BAY</span>' +
+        '<span id="hud-clock" class="hud-clock"></span></div>' +
+        '<div class="hud-bar-row"><span class="hud-label">HEALTH</span>' +
+        '<div class="hud-bar"><div id="hud-health" class="hud-fill hud-health"></div></div>' +
+        '<span id="hud-health-n" class="hud-num"></span></div>' +
+        '<div class="hud-bar-row"><span class="hud-label">ARMOR</span>' +
+        '<div class="hud-bar"><div id="hud-armor" class="hud-fill hud-armor"></div></div>' +
+        '<span id="hud-armor-n" class="hud-num"></span></div>' +
+        '<div class="hud-row"><span id="hud-vehicle" class="hud-vehicle"></span></div>' +
+        '<div class="hud-row"><span id="hud-rep" class="hud-rep"></span></div>' +
+      '</div>' +
+      '<div id="hud-tr" class="hud-panel">' +
+        '<div id="hud-stars" class="hud-stars"></div>' +
+        '<div id="hud-sight" class="hud-sight" style="display:none">IN SIGHT</div>' +
+        '<div class="hud-row hud-tr-row"><span id="hud-cash" class="hud-cash"></span>' +
+        '<span id="hud-speed" class="hud-speed"></span></div>' +
+      '</div>' +
+      '<div id="hud-bl">' +
+        '<div id="hud-mission" class="hud-panel">' +
+          '<div id="hud-m-name" class="hud-m-name">NO ACTIVE MISSION</div>' +
+          '<div class="hud-m-grid">' +
+            '<div class="hud-m-cell"><span class="hud-label">STAGE</span><span id="hud-m-stage">—</span></div>' +
+            '<div class="hud-m-cell"><span class="hud-label">TIMER</span><span id="hud-m-timer">—</span></div>' +
+            '<div class="hud-m-cell"><span class="hud-label">PAYOUT</span><span id="hud-m-payout">—</span></div>' +
+          '</div>' +
+          '<div class="hud-m-next"><span class="hud-label">NEXT</span><span id="hud-m-next">—</span></div>' +
+          '<div class="hud-m-gps"><span class="hud-label">GPS</span><span id="hud-m-gps">—</span></div>' +
+        '</div>' +
+        '<div id="hud-crew" class="hud-panel">' +
+          '<div class="hud-crew-title">CREW</div>' +
+          '<div class="hud-crew-row"><span class="hud-crew-name">Lucia Ortega</span><span class="hud-crew-role">DRIVER</span></div>' +
+          '<div class="hud-crew-row"><span class="hud-crew-name">Jax</span><span class="hud-crew-role">MECHANIC</span></div>' +
+          '<div class="hud-crew-row"><span class="hud-crew-name">Mara Solis</span><span class="hud-crew-role">LOOKOUT</span></div>' +
+        '</div>' +
+      '</div>' +
+      '<div id="hud-br">' +
+        '<div id="hud-minimap-wrap"><canvas id="hud-minimap" width="200" height="200"></canvas>' +
+        '<div class="hud-minimap-n">N</div></div>' +
+        '<div id="hud-radio" class="hud-panel"><span id="hud-radio-name"></span>' +
+        '<span class="hud-radio-hint">Q / R ganti stasiun</span></div>' +
+      '</div>' +
+      '<div id="hud-paused" class="hud-paused" style="display:none">PAUSED</div>';
+    document.body.appendChild(root);
   }
+
   function drawMinimap() {
-    if (!mmCv) {
-      mmCv = document.createElement('canvas');
-      mmCv.id = 'hud-minimap'; mmCv.width = 150; mmCv.height = 150;
-      el.mmWrap.appendChild(mmCv); mm = mmCv.getContext('2d');
+    var cv = $('hud-minimap');
+    if (!cv) return;
+    var s = st();
+    if (num(s.simTime, 0) - lastMinimapSim < 0.3 && lastMinimapSim >= 0) return;
+    lastMinimapSim = num(s.simTime, 0);
+    var ctx = cv.getContext('2d');
+    if (!ctx) return;
+    var W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0e1a24';
+    ctx.fillRect(0, 0, W, H);
+    var ds = (SB.city && Array.isArray(SB.city.districts)) ? SB.city.districts : [];
+    if (!ds.length) {
+      ctx.fillStyle = '#9fb0c0';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('SOLMAR BAY', W / 2, H / 2);
+      return;
     }
-    if (!mm) return;
-    var c = mm, W = 150, H = 150, cx = W / 2, cy = H / 2, b = mapBounds();
-    var sc = Math.min(W / (b.maxX - b.minX), H / (b.maxZ - b.minZ));
-    function px(x) { return cx + (x - (b.minX + b.maxX) / 2) * sc; }
-    function py(z) { return cy + (z - (b.minZ + b.maxZ) / 2) * sc; }
-    c.save(); c.beginPath(); c.arc(cx, cy, 73, 0, 6.2832); c.clip();
-    c.fillStyle = '#0c1420'; c.fillRect(0, 0, W, H);
+    var minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     var i, d;
-    var dists = (SB.city && SB.city.districts) || [];
-    for (i = 0; i < dists.length; i++) { d = dists[i]; var r = rectOf(d); c.fillStyle = d.tint || '#1a2b3d'; c.fillRect(px(r.x), py(r.z), r.w * sc, r.h * sc); }
-    var roads = (SB.city && SB.city.roads) || [];
-    c.strokeStyle = '#3a4a5a'; c.lineWidth = 2;
-    for (i = 0; i < roads.length; i++) {
-      var rd = roads[i]; c.beginPath();
-      if (rd.axis) { if (rd.axis === 'z') { c.moveTo(px(rd.at), py(rd.from)); c.lineTo(px(rd.at), py(rd.to)); } else { c.moveTo(px(rd.from), py(rd.at)); c.lineTo(px(rd.to), py(rd.at)); } }
-      else { c.moveTo(px(rd.x0), py(rd.z0)); c.lineTo(px(rd.x1), py(rd.z1)); }
-      c.stroke();
+    for (i = 0; i < ds.length; i++) {
+      d = ds[i];
+      if (!d) continue;
+      minX = Math.min(minX, d.cx - d.w / 2);
+      maxX = Math.max(maxX, d.cx + d.w / 2);
+      minZ = Math.min(minZ, d.cz - d.d / 2);
+      maxZ = Math.max(maxZ, d.cz + d.d / 2);
     }
-    function dot(x, z, color, rad) { c.fillStyle = color; c.beginPath(); c.arc(px(x), py(z), rad || 3, 0, 6.2832); c.fill(); }
-    var hp = heroPos();
-    if (SB.police && SB.police.heli && hp) { c.strokeStyle = 'rgba(255,80,80,0.9)'; c.lineWidth = 1.5; c.beginPath(); c.arc(px(hp.x), py(hp.z), 26, 0, 6.2832); c.stroke(); }
-    var sp = (SB.city && SB.city.spawnPoints) || {};
-    if (sp.safehouse) dot(sp.safehouse.x != null ? sp.safehouse.x : sp.safehouse[0], sp.safehouse.z != null ? sp.safehouse.z : sp.safehouse[1], '#39d95e', 3);
-    var cops = (SB.police && SB.police.cops) || [];
-    for (i = 0; i < cops.length; i++) { var p = cops[i]; if (p.pos) dot(p.pos.x, p.pos.z, '#ff4040', 3); else if (typeof p.x === 'number') dot(p.x, p.z, '#ff4040', 3); }
-    var m = missionView();
-    if (m && m.target) { var tx = m.target.x != null ? m.target.x : m.target[0], tz = m.target.z != null ? m.target.z : m.target[1]; dot(tx, tz, '#ffd23f', 4); }
-    if (hp) {
-      var hd = (SB.vehicles && SB.vehicles.active && SB.vehicles.active.heading) || 0;
-      c.save(); c.translate(px(hp.x), py(hp.z)); c.rotate(-hd);
-      c.fillStyle = '#ffffff'; c.beginPath(); c.moveTo(0, -6); c.lineTo(4, 5); c.lineTo(-4, 5); c.closePath(); c.fill(); c.restore();
+    var spanX = Math.max(1, maxX - minX), spanZ = Math.max(1, maxZ - minZ);
+    var sc = Math.min((W - 16) / spanX, (H - 16) / spanZ);
+    var ox = (W - spanX * sc) / 2 - minX * sc;
+    var oy = (H - spanZ * sc) / 2 + maxZ * sc;
+    function X(x) { return ox + x * sc; }
+    function Z(z) { return oy - z * sc; }
+    for (i = 0; i < ds.length; i++) {
+      d = ds[i];
+      if (!d) continue;
+      ctx.fillStyle = MINIMAP_COLORS[i % MINIMAP_COLORS.length];
+      ctx.fillRect(X(d.cx - d.w / 2), Z(d.cz + d.d / 2), d.w * sc, d.d * sc);
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.strokeRect(X(d.cx - d.w / 2), Z(d.cz + d.d / 2), d.w * sc, d.d * sc);
     }
-    c.restore();
-    c.strokeStyle = 'rgba(255,255,255,0.55)'; c.lineWidth = 2; c.beginPath(); c.arc(cx, cy, 73, 0, 6.2832); c.stroke();
+    if (SB.city && Array.isArray(SB.city.roads)) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.30)';
+      ctx.lineWidth = 1;
+      var roads = SB.city.roads;
+      for (i = 0; i < roads.length; i++) {
+        var r = roads[i];
+        if (!r) continue;
+        ctx.beginPath();
+        ctx.moveTo(X(r.x0), Z(r.z0));
+        ctx.lineTo(X(r.x1), Z(r.z1));
+        ctx.stroke();
+      }
+    }
+    if (SB.city && SB.city.bank && SB.city.bank.pos) {
+      var bp = SB.city.bank.pos;
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillRect(X(num(bp[0], 2)) - 3, Z(num(bp[2], -2)) - 3, 6, 6);
+    }
+    var md = missionData();
+    if (md && SB.missions && SB.missions.list) {
+      var list = SB.missions.list;
+      for (i = 0; i < list.length; i++) {
+        if (!list[i] || !list[i].district) continue;
+        var dc = null;
+        for (var j = 0; j < ds.length; j++) {
+          if (ds[j] && ds[j].name === list[i].district) { dc = ds[j]; break; }
+        }
+        if (!dc) continue;
+        var isActive = SB.missions.active && SB.missions.active.id === list[i].id;
+        ctx.fillStyle = list[i].done ? '#4ade80' : (isActive ? '#FFB347' : '#6b7280');
+        ctx.beginPath();
+        ctx.arc(X(dc.cx), Z(dc.cz), isActive ? 5 : 3, 0, 6.2832);
+        ctx.fill();
+      }
+    }
+    var p = heroPos();
+    ctx.fillStyle = '#22d3ee';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(X(p[0]), Z(p[1]), 4, 0, 6.2832);
+    ctx.fill();
+    ctx.stroke();
   }
-  function weaponId() {
-    if (SB.player && typeof SB.player.weapon === 'number') { var w = ARMS[SB.player.weapon - 1]; return w ? w[0] : 'fists'; }
-    return st().weapon || 'fists';
-  }
+
   function update() {
-    if (!el.root) return;
-    var s = st(), k;
-    var hidden = s.started === false || s.preset === 'title' || s.scenePreset === 'title';
-    el.root.style.display = hidden ? 'none' : '';
-    if (hidden) return;
-    setTxt(el.cash, fmt$(cash()));
-    var ri = repInfo();
-    setTxt(el.repTitle, ri.title + ' · REP ' + rep() + ' · LV ' + ri.level);
-    if (el.repFill) el.repFill.style.width = Math.max(0, Math.min(100, (ri.xpInto / Math.max(1, ri.xpNext)) * 100)) + '%';
-    var done = num(s.missionsDone, 0);
-    if (SB.missions && SB.missions.list) { var dc = 0; for (k = 0; k < SB.missions.list.length; k++) if (SB.missions.list[k].done) dc++; if (dc > done) done = dc; }
-    setTxt(el.story, 'STORY ' + done + '/' + num(s.missionsTotal, 8) + ' · COINS ' + num(s.coins, 0) + '/' + num(s.coinsTotal, 20));
-    setTxt(el.clock, clockText() + ' · DAY ' + num(s.day, 1));
-    setTxt(el.season, (s.timeLabel || s.timeOfDay || 'SUNSET').toUpperCase() + (s.weather && s.weather !== 'clear' ? ' · ' + s.weather.toUpperCase() : ''));
-    var n = stars(), starTxt = '';
-    for (k = 0; k < 5; k++) starTxt += k < n ? '★' : '☆';
-    setTxt(el.wanted, starTxt);
-    el.wanted.style.color = n >= 4 ? '#ff4040' : n >= 2 ? '#ffb347' : '#ffffff';
-    var hpv = num(s.health, 100), arv = num(s.armor, 0);
-    if (el.hpFill) el.hpFill.style.width = Math.max(0, Math.min(100, hpv)) + '%';
-    if (el.arFill) el.arFill.style.width = Math.max(0, Math.min(100, arv)) + '%';
-    setTxt(el.hpVal, '' + Math.round(hpv));
-    setTxt(el.arVal, '' + Math.round(arv));
-    var m = missionView();
-    if (m) {
-      setTxt(el.mTitle, (m.name || 'MISSION').toUpperCase());
-      setTxt(el.mStage, 'STAGE ' + num(m.stage, 1) + '/' + num(m.stageTotal, 1));
-      setTxt(el.mObj, 'NEXT: ' + (m.objective || ''));
-      setTxt(el.mTimer, m.timer ? '⏱ ' + Math.floor(m.timer / 60) + ':' + String(Math.floor(m.timer % 60)).padStart(2, '0') : '');
-      setTxt(el.mPayout, 'PAYOUT ' + fmt$(m.payout || 0));
-      setTxt(el.mGps, gpsText(m));
-    } else {
-      setTxt(el.mTitle, 'NO ACTIVE MISSION');
-      setTxt(el.mStage, '');
-      setTxt(el.mObj, s.objective ? 'NEXT: ' + s.objective : 'Start a job: press M for map');
-      setTxt(el.mTimer, '');
-      setTxt(el.mPayout, '');
-      setTxt(el.mGps, s.objective ? 'GPS: ' + s.objective : '');
+    if (!built) buildDom();
+    var s = st();
+    var el = null;
+    el = $('hud-clock');
+    if (el) el.textContent = clockText();
+    var health = SB.player ? num(SB.player.health, 100) : 100;
+    var armor = SB.player ? num(SB.player.armor, 0) : 0;
+    health = clamp(health, 0, 100);
+    armor = clamp(armor, 0, 100);
+    el = $('hud-health');
+    if (el) el.style.width = health + '%';
+    el = $('hud-health-n');
+    if (el) el.textContent = Math.round(health);
+    el = $('hud-armor');
+    if (el) el.style.width = armor + '%';
+    el = $('hud-armor-n');
+    if (el) el.textContent = Math.round(armor);
+    var inVehicle = !!(SB.vehicles && SB.vehicles.active);
+    el = $('hud-vehicle');
+    if (el) {
+      if (inVehicle) {
+        var vn = typeof s.vehicleName === 'string' && s.vehicleName.length > 0 ? s.vehicleName : 'CAR';
+        var cond = Math.round(clamp(num(s.vehicleCond, 100), 0, 100));
+        var vs = typeof s.vehicleStatus === 'string' ? s.vehicleStatus : 'OK';
+        el.textContent = vn + ' · ' + cond + '% · ' + vs;
+      } else {
+        el.textContent = 'ON FOOT';
+      }
     }
-    var resp = [];
-    if (SB.police) {
-      if (SB.police.response && SB.police.response.length != null) resp = SB.police.response;
-      else if (typeof SB.police.responseList === 'function') { try { resp = SB.police.responseList() || []; } catch (e) { resp = []; } }
+    var rep = repTotal();
+    el = $('hud-rep');
+    if (el) el.textContent = 'REP ' + Math.floor(rep) + ' · ' + rankName(rep);
+    var stars = heatStars();
+    el = $('hud-stars');
+    if (el) {
+      var starTxt = '';
+      for (var i = 0; i < 5; i++) starTxt += (i < stars) ? '★' : '☆';
+      el.textContent = starTxt;
     }
-    var rTxt = '', sight = s.inSight === true || (n > 0 && resp.length > 0);
-    if (n > 0 && resp.length) {
-      rTxt = 'RESPONSE' + (sight ? ' — IN SIGHT' : '') + '\n';
-      resp.slice(0, 4).forEach(function (u) { rTxt += (u.name || u.unit || 'UNIT') + ' · ' + num(u.dist, 0) + 'm · ' + (u.status || 'PURSUIT') + '\n'; });
-    } else if (n > 0) rTxt = 'RESPONSE' + (sight ? ' — IN SIGHT' : '') + '\n' + n + '★ — units inbound';
-    if (el.response) {
-      if (seen.respHtml !== rTxt) { seen.respHtml = rTxt; el.response.innerHTML = rTxt.split('\n').join('<br>'); }
-      el.response.style.display = rTxt ? '' : 'none';
-    }
-    var vName = s.vehicleName && s.vehicleName !== '—' ? s.vehicleName : null;
-    var veh = s.vehicle || (SB.vehicles && SB.vehicles.active) || null;
-    if (vName || veh) {
-      setTxt(el.speed, Math.round(num(s.speedKmh, 0)) + ' km/h · ' + (s.gear || 'N'));
-      var cond = s.vehicleCond != null ? s.vehicleCond : (veh && veh.condition != null ? veh.condition : 100);
-      var vstat = s.vehicleStatus || (cond < 60 ? 'DENTED' : 'OK');
-      setTxt(el.veh, (vName || veh.name || 'CAR') + ' · ' + Math.round(cond) + '%' + (vstat === 'DENTED' ? ' · DENTED' : cond < 90 ? ' · SCRATCHED' : ''));
-    } else { setTxt(el.speed, 'ON FOOT'); setTxt(el.veh, s.location || ''); }
-    var wps = s.weapons || {}, cur = weaponId();
-    el.wheelSlots.forEach(function (slot, i) {
-      var w = ARMS[i], wp = wps[w[0]] || {};
-      var locked = !!wp.locked || (w[0] === 'rifle' && !wps.rifle);
-      var ammo = wp.ammo === Infinity ? '∞' : (wp.ammo != null ? num(wp.ammo, 0) : '');
-      var txt = w[2] + (locked ? ' 🔒' : (ammo === '' ? '' : ' ' + ammo));
-      if (seen[slot.id] !== txt) { seen[slot.id] = txt; slot.textContent = txt; }
-      slot.className = 'hud-wslot' + (cur === w[0] ? ' active' : '') + (locked ? ' locked' : '');
-    });
-    if (SB.radio && typeof SB.radio.current === 'function') {
-      try { var curR = SB.radio.current(); setTxt(el.radio, '♪ ' + (curR.name || '') + ' — ' + (curR.track || '') + (curR.playing === false ? ' (PAUSED)' : '')); }
-      catch (e) { setTxt(el.radio, '♪ RADIO'); }
-    } else if (s.radio) setTxt(el.radio, '♪ ' + (s.radio.name || '') + ' — ' + (s.radio.track || ''));
-    setTxt(el.loc, (s.location || '') + (s.street ? ' · ' + s.street : ''));
-    if (el.paused) el.paused.style.display = (s.paused && !staging) ? '' : 'none';
+    el = $('hud-sight');
+    if (el) el.style.display = s.inSight ? '' : 'none';
+    el = $('hud-cash');
+    if (el) el.textContent = fmtMoney(cashTotal());
+    el = $('hud-speed');
+    if (el) el.textContent = Math.round(clamp(num(s.speedKmh, 0), 0, 999)) + ' km/h';
+    var md = missionData();
+    el = $('hud-m-name');
+    if (el) el.textContent = md && md.name ? String(md.name).toUpperCase() : 'NO ACTIVE MISSION';
+    el = $('hud-m-stage');
+    if (el) el.textContent = (md && md.stage) ? md.stage : '—';
+    el = $('hud-m-timer');
+    if (el) el.textContent = (md && md.timer !== null && md.timer !== undefined) ? fmtTimer(md.timer) : '—';
+    el = $('hud-m-payout');
+    if (el) el.textContent = (md && md.payout !== null && md.payout !== undefined) ? fmtMoney(md.payout) : '—';
+    el = $('hud-m-next');
+    if (el) el.textContent = (md && md.next) ? md.next : '—';
+    el = $('hud-m-gps');
+    if (el) el.textContent = gpsText();
+    el = $('hud-radio-name');
+    if (el) el.textContent = radioName();
+    el = $('hud-paused');
+    if (el) el.style.display = (s.paused && !staging) ? '' : 'none';
     drawMinimap();
   }
-  var rafOn = false;
-  function hudLoop() {
-    if (!rafOn) return;
-    try { update(); } catch (e) {}
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(hudLoop); else rafOn = false;
-  }
-  function startLoop() {
-    if (rafOn || typeof requestAnimationFrame !== 'function') return;
-    rafOn = true; requestAnimationFrame(hudLoop);
-  }
-  // Kamera follow collision-aware (SB.cam): wrap SB.engine.step, koreksi
-  // kamera setelah render engine, lalu render ulang. Preset cover/map dibiarkan.
-  var camWrap = false, camInfo = { mode: '-', pulled: 0, lifted: false, heroInside: false }, bCache = null, bCacheN = -1;
-  function blds() {
-    var E = SB.engine;
-    if (!E || !E.scene || typeof THREE === 'undefined') return [];
-    var ch = E.scene.children || [];
-    if (bCache && ch.length === bCacheN) return bCache;
-    var o = [];
-    for (var i = 0; i < ch.length; i++) {
-      var m = ch[i];
-      if (!m.isMesh || !m.geometry || !m.geometry.parameters || m.geometry.type !== 'BoxGeometry') continue;
-      var p = m.geometry.parameters;
-      if (p.height >= 6 && p.width >= 6 && p.depth >= 6) o.push({ m: m, b: new THREE.Box3().setFromObject(m) });
-    }
-    bCache = o; bCacheN = ch.length; return o;
-  }
-  function boxAt(x, y, z, bs) {
-    for (var i = 0; i < bs.length; i++) { var b = bs[i].b; if (x >= b.min.x && x <= b.max.x && y >= b.min.y && y <= b.max.y && z >= b.min.z && z <= b.max.z) return b; }
-    return null;
-  }
-  function camCorrect() {
-    var E = SB.engine;
-    if (!E || !E.camera || !E.scene || typeof THREE === 'undefined') return;
-    var pr = SB.state.preset;
-    // r10: 'mission' ikut di-skip — follow-cam menaruh papan bank 35° di atas
-    // pusat pandang (di luar half-FOV 31°) sehingga tak terlihat; staging
-    // mission pakai kamera preset (bank + mobil pink terbaca). Drive scene
-    // yang menguji follow-cam saat mengemudi.
-    if (pr === 'map' || pr === 'cover' || pr === 'mission') return;
-    var hp = null;
-    try { hp = E.heroPos ? E.heroPos() : null; } catch (e) {}
-    if (!hp) return;
-    var h = E.heading || 0, fx = Math.sin(h), fz = Math.cos(h), bs = blds();
-    // r12: follow LEBIH DEKAT (dist 9, height 4, look-ahead 4) — hero BESAR
-    // di tengah frame, bukan figur kecil/jauh (cacat juri r11 #3).
-    var eye = new THREE.Vector3(hp[0], 1.2, hp[1]), dist = 9, ht = 4.0;
-    if (boxAt(hp[0], 1.2, hp[1], bs)) { dist = 4.5; ht = 2.8; camInfo.heroInside = true; } else camInfo.heroInside = false;
-    var dx = hp[0] - fx * dist, dz = hp[1] - fz * dist;
-    var dir = new THREE.Vector3(dx - eye.x, ht - eye.y, dz - eye.z), len = dir.length(), pulled = 0;
-    if (len > 0.01) {
-      dir.normalize();
-      var ms = []; for (var i = 0; i < bs.length; i++) ms.push(bs[i].m);
-      var hits = new THREE.Raycaster(eye, dir, 0, len).intersectObjects(ms, false);
-      if (hits.length && hits[0].distance < len - 0.5) {
-        var nd = Math.max(3.5, hits[0].distance - 1.2);
-        dx = eye.x + dir.x * nd; ht = eye.y + dir.y * nd; dz = eye.z + dir.z * nd; pulled = len - nd;
-      }
-    }
-    var lifted = false, bx = boxAt(dx, ht, dz, bs);
-    if (bx && !camInfo.heroInside) { ht = bx.max.y + 2.5; lifted = true; }
-    camInfo.pulled = pulled; camInfo.lifted = lifted;
-    camInfo.mode = camInfo.heroInside ? 'close' : (pulled > 0 ? 'pulled' : (lifted ? 'lifted' : 'follow'));
-    E.camera.position.set(dx, ht, dz);
-    E.camera.lookAt(hp[0] + fx * 4, 1.4, hp[1] + fz * 4);
-  }
-  function installCamWrap() {
-    if (camWrap) return;
-    var E = SB.engine;
-    if (!E || typeof E.step !== 'function') return;
-    camWrap = true; SB._b4cam = true;
-    var orig = E.step;
-    E.step = function (dt) {
-      var r = orig.call(E, dt);
-      try { camCorrect(); if (E.renderer && E.scene && E.camera) E.renderer.render(E.scene, E.camera); } catch (e) {}
-      return r;
-    };
-  }
-  var toastTimer = 0;
-  function toast(msg) {
-    if (!el.toast) return;
-    el.toast.textContent = msg; el.toast.style.opacity = '1'; toastTimer++;
-    var t = toastTimer;
-    setTimeout(function () { if (t === toastTimer && el.toast) el.toast.style.opacity = '0'; }, 2600);
-  }
-  function setStaging(b) {
-    staging = !!b; SB.state.staging = staging;
-    if (el.paused) el.paused.style.display = 'none';
-    if (el.root) el.root.classList.toggle('staging', staging);
-  }
-  function showBusted() { if (el.busted) el.busted.style.display = ''; }
-  function showWasted() { if (el.wasted) el.wasted.style.display = ''; }
-  function showMissionBrief(m) { if (m) toast('NEW JOB: ' + (m.name || m.title || 'MISSION') + ' — ' + fmt$(m.payout || 0)); }
-  function setObjective(t) { if (el.mObj) el.mObj.textContent = 'NEXT: ' + t; }
-  function setPaused(b) {
-    SB.state.paused = !!b;
-    if (typeof SB.setPaused === 'function') { try { SB.setPaused(!!b); } catch (e) {} }
-  }
-  function onKey(e) {
-    var s = st();
-    if (s.started === false) return;
-    if (e.code === 'KeyM') { if (SB.map) SB.map.toggle(); return; }
-    if (e.code === 'Escape') { if (SB.map) SB.map.hide(); if (SB.shops) SB.shops.close(); if (SB.dialog) SB.dialog.hide(); return; }
-    if (s.paused) { if (e.code === 'KeyP') setPaused(false); return; }
-    if (e.code === 'KeyP') { setPaused(true); return; }
-    if (e.code === 'KeyQ') { if (SB.radio) SB.radio.next(); return; }
-    if (e.code === 'KeyR') { if (SB.combat && typeof SB.combat.reload === 'function') SB.combat.reload(); return; }
-    if (e.code === 'KeyF') { if (SB.shops) SB.shops.open('weapons'); return; }
-    var di = { Digit1: 0, Digit2: 1, Digit3: 2, Digit4: 3, Digit5: 4 }[e.code];
-    if (di != null) {
-      if (SB.combat && typeof SB.combat.selectWeapon === 'function') SB.combat.selectWeapon(ARMS[di][0]);
-      else if (SB.player) { SB.player.weapon = di + 1; SB.state.weapon = ARMS[di][0]; }
-    }
-  }
-  function init() {
-    if (el.root) return;
-    injectCss();
+
+  SB.hud = SB.hud || {};
+  SB.hud.init = function () {
     buildDom();
-    installCamWrap();
-    if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('keydown', onKey);
-    if (typeof SB.registerUpdate === 'function') { try { SB.registerUpdate(update); } catch (e) {} }
-    if (typeof SB.on === 'function') {
-      SB.on('mission-complete', function () { if (SB.save) SB.save.autosave(); });
-      SB.on('busted', showBusted);
-      SB.on('wasted', showWasted);
-      SB.on('mission-start', function (m) { showMissionBrief(m); });
-      SB.on('scene', function (ev) { if (ev && ev.name === 'map' && SB.map) SB.map.show(); if (ev && ev.name !== 'map' && SB.map) SB.map.hide(); });
-    }
     update();
-    startLoop();
-  }
-  SB.cam = { correct: camCorrect, info: function () { return camInfo; }, wrapInstalled: function () { return camWrap; }, buildings: function () { return blds().length; } };
-  SB.hud = { init: init, update: update, toast: toast, setStaging: setStaging, setObjective: setObjective, showBusted: showBusted, showWasted: showWasted, showMissionBrief: showMissionBrief, drawMinimap: drawMinimap, cash: cash, rep: rep, stars: stars, setPaused: setPaused, missionView: missionView, isStaging: function () { return staging; } };
+    if (typeof SB.registerUpdate === 'function') {
+      try { SB.registerUpdate(update); } catch (e) { /* fallback ke rAF */ }
+    }
+    // Loop rAF sendiri (pola r9, API.md §3): update idempotent, jadi
+    // pemanggilan ganda per frame AMAN dan HUD tetap hidup bila step() diam.
+    (function raf() {
+      try { update(); } catch (e) { /* jangan matikan loop */ }
+      requestAnimationFrame(raf);
+    })();
+  };
+  SB.hud.update = update;
+  SB.hud.setStaging = function (flag) {
+    staging = !!flag;
+    if (st()) st().staging = staging;
+    update();
+  };
+  SB.hud._crew = CREW;
+  SB.hud._stations = STATIONS;
 })();

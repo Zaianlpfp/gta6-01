@@ -1,32 +1,14 @@
-// engine.js — B1 r12. Three.js setup, loop, kamera chase, langit, efek.
-// Kontrak: game/API.md. Deterministik: tanpa Math.random / Date.now.
-// Perbaikan r12 vs r11 (juri buta r11 30 vs 27 — hero onfoot kecil/jauh,
-// fasad kiri ~30% frame):
-//  - Spawn onfoot PINDAH dari (40,62) ke PERSIMPANGAN (0,40) di jalan x=0
-//    (zebra cross + jalan silang z=40 membuka frame; papan bank (2,7,-2)
-//    terbaca di kejauhan — kota tampil, bukan satu fasad).
-//  - Kamera preset onfoot lebih dekat: pos (0,5.0,50), look (0,1.3,38)
-//    (r11: (40,6.0,78)/(40,1.2,56), jarak 16 — hero kecil). Jarak kini 10.
-//  - Foreground pasar pindah ke jalan x=0 (city.js) mengikuti spawn baru.
-// Perbaikan r10 vs r9:
-//  - SB.registerUpdate(fn) DIDEFINISIKAN di sini + dipanggil step() tiap frame
-//    (r9: tidak ada yang mendefinisikannya — hanya hud.js yang memanggil
-//    dengan guard — itu akar HUD beku: hud.update() cuma jalan sekali saat init).
-//  - Clamp dt 0,05 DIHAPUS dari loop rAF (boot/start): dt live = wall-clock,
-//    cap 1,0 detik. Temuan B2 r9: clamp 0,05 bikin sim live 10-20x lebih
-//    lambat dari wall di headless ~1fps (10 dtk W-hold cuma majukan simTime
-//    0,47 dtk). Modul B2 sudah menangani dt sampai 1,0 dtk.
-//  - Kamera onfoot: pos (40,6.0,78), look (40,1.2,56) + koridor jalan
-//    dilebarkan di city.js (fasad >=7,5 dari sumbu jalan).
-// Dipertahankan dari r10/r11: advanceClock di step() (jam maju); step()
-// memanggil SB.police.update(dt) (satu-satunya caller); cone heli opacity
-// 0,10; spawn onfoot (0,40) r12; stall/mobil/palm di tepi jalan; ped drift
-// murni simTime.
+// engine.js — Solmar Bay engine: Three.js boot, sim loop, chase camera, effects.
+// Fresh write for gta6-01 v4 rebuild r13 (from game/API.md §0-§3).
+// Deterministic: no built-in nondeterministic sources in game code.
+// All randomness goes through SB.rng() (mulberry32, seed 1337).
 (function () {
+  'use strict';
   var SB = window.SB = window.SB || {};
 
-  // ---- RNG deterministik (mulberry32) ----
-  function mulberry32(a) {
+  // ---------- deterministic RNG (mulberry32, API.md §1) ----------
+  function mulberry32(seed) {
+    var a = seed >>> 0;
     return function () {
       a |= 0; a = (a + 0x6D2B79F5) | 0;
       var t = Math.imul(a ^ (a >>> 15), 1 | a);
@@ -34,360 +16,440 @@
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   }
-  SB.rng = mulberry32;
-  SB._seed = 1337;
-  SB.rand = mulberry32(SB._seed);
-  SB.rngReset = function (seed) {
-    SB._seed = (seed === undefined) ? 1337 : seed;
-    SB.rand = mulberry32(SB._seed);
-  };
+  SB.rng = function (seed) { return mulberry32(seed == null ? 1337 : seed); };
+  SB.rand = SB.rng(1337);
+  SB.rngReset = function () { SB.rand = SB.rng(1337); };
   SB.randRange = function (a, b) { return a + SB.rand() * (b - a); };
   SB.randInt = function (a, b) { return Math.floor(SB.randRange(a, b + 1)); };
-  SB.randPick = function (arr) { return arr[Math.floor(SB.rand() * arr.length)]; };
+  SB.randPick = function (arr) { return arr[SB.randInt(0, arr.length - 1)]; };
 
-  // ---- State global ----
-  SB.cash = 0;
+  // ---------- global state (API.md §2) ----------
   SB.state = {
     paused: false, heat: 0, rep: 0, cash: 0,
     day: 1, hour: 17, min: 24, timeLabel: 'SUNSET',
-    clockRate: 1, // 1 detik sim = 1 menit game (v3)
-    simTime: 0, preset: 'cover', speedKmh: 0,
-    vehicleName: '—', vehicleCond: 100, vehicleStatus: 'OK',
+    clockRate: 1, simTime: 0, preset: 'cover',
+    speedKmh: 0, vehicleName: '—', vehicleCond: 100, vehicleStatus: 'OK',
     inSight: false, objective: '', staging: false
   };
-  // Jam HUD dalam menit sejak 00:00; dimajukan advanceClock() tiap step().
   SB._clockMin = 17 * 60 + 24;
+  SB.cash = 0;
 
-  // ---- Per-frame update registry (r10, BARU) ----
-  // Akar HUD beku r8/r9: SB.registerUpdate tidak pernah didefinisikan di file
-  // game mana pun — hud.js memanggilnya dengan guard sehingga no-op, dan
-  // hud.update() hanya jalan sekali saat init. Kini didefinisikan di sini:
-  // step() memanggil semua callback terdaftar tiap tick, SETELAH state
-  // dimajukan dan SEBELUM render, supaya HUD/modul lain membaca state terbaru.
-  SB._updates = [];
+  // ---------- update callbacks (API.md §3) ----------
+  // SB.registerUpdate(fn): called by E.step(dt) EVERY tick, after simTime/clock/
+  // police/peds/flash and BEFORE render, so HUD and other modules always read
+  // the freshest state. Registered once (duplicates ignored); one callback's
+  // error never stops the others (try/catch per callback).
+  var _updates = [];
   SB.registerUpdate = function (fn) {
-    if (typeof fn !== 'function') return false;
-    if (SB._updates.indexOf(fn) !== -1) return true; // duplikat diabaikan
-    SB._updates.push(fn);
-    return true;
+    if (typeof fn !== 'function') return;
+    if (_updates.indexOf(fn) === -1) _updates.push(fn);
   };
   SB.unregisterUpdate = function (fn) {
-    var i = SB._updates.indexOf(fn);
-    if (i === -1) return false;
-    SB._updates.splice(i, 1);
-    return true;
+    var i = _updates.indexOf(fn);
+    if (i !== -1) _updates.splice(i, 1);
   };
 
-  // Jam game: 1 detik sim = 1 menit game (clockRate, sama seperti v3).
-  // Pure function dari simTime -> deterministik.
-  function advanceClock(dt) {
-    var rate = (typeof SB.state.clockRate === 'number') ? SB.state.clockRate : 1;
-    if (typeof SB._clockMin !== 'number') SB._clockMin = (SB.state.hour || 17) * 60 + (SB.state.min || 24);
-    SB._clockMin += dt * rate;
-    while (SB._clockMin >= 1440) { SB._clockMin -= 1440; SB.state.day += 1; }
-    SB.state.hour = Math.floor(SB._clockMin / 60);
-    SB.state.min = Math.floor(SB._clockMin % 60);
-    var h = SB.state.hour;
-    SB.state.timeLabel = (h >= 20 || h < 6) ? 'NIGHT' : (h >= 17 ? 'SUNSET' : 'DAY');
-  }
-
-  // ---- Engine ----
+  // ---------- engine ----------
   var E = SB.engine = {};
-  var rafId = 0, lastT = 0;
-  var flashes = [], flashLight = null;
-  var clouds = [], sunDisc = null;
-  var skyMat = null;
-  // dt live: wall-clock, cap 1,0 detik (r10 — r9 clamp 0,05 bikin sim live
-  // 10-20x lebih lambat dari wall di headless ~1fps). B2 menangani dt s.d. 1,0.
-  var DT_CAP = 1.0;
+  E.scene = null; E.camera = null; E.renderer = null; E.canvas = null; E.sun = null;
+  E.muzzlePos = null;
 
-  function skyGradient(top, mid, bot) {
-    return new THREE.ShaderMaterial({
-      side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { cTop: { value: new THREE.Color(top) }, cMid: { value: new THREE.Color(mid) }, cBot: { value: new THREE.Color(bot) } },
-      vertexShader: 'varying vec3 vP; void main(){ vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
-      fragmentShader: 'varying vec3 vP; uniform vec3 cTop; uniform vec3 cMid; uniform vec3 cBot;' +
-        'void main(){ float h=normalize(vP).y; vec3 c = h>0.12 ? mix(cMid,cTop,smoothstep(0.12,0.65,h)) : mix(cBot,cMid,smoothstep(-0.08,0.12,h));' +
-        ' gl_FragColor=vec4(c,1.0); }'
-    });
-  }
+  var _running = false, _rafId = 0, _lastPerf = 0;
+  var _clouds = [];
+  var _flashes = [], _flashLight = null;
+  var _camPos = null, _camLook = null;
+  var _follow = { pos: [10.5, 5.4, 19.5], look: [-0.5, 1.6, -4] };
 
-  function buildSky(scene) {
-    var sky = new THREE.Mesh(new THREE.SphereGeometry(760, 24, 16), skyMat);
-    sky.name = 'sky'; scene.add(sky);
-    // Sun disc: cakram oranye di arah matahari (-8,150,-420) dinormalisasi
-    var dir = new THREE.Vector3(-8, 150, -420).normalize();
-    sunDisc = new THREE.Mesh(new THREE.CircleGeometry(34, 32),
-      new THREE.MeshBasicMaterial({ color: 0xffd27a, fog: false }));
-    sunDisc.position.copy(dir).multiplyScalar(700);
-    sunDisc.lookAt(0, 0, 0); scene.add(sunDisc);
-    var glow = new THREE.Mesh(new THREE.CircleGeometry(62, 32),
-      new THREE.MeshBasicMaterial({ color: 0xff9a4d, transparent: true, opacity: 0.35, fog: false }));
-    glow.position.copy(dir).multiplyScalar(695); glow.lookAt(0, 0, 0); scene.add(glow);
-    // Awan: gumpalan pipih putih/ungu, drift deterministik dari simTime
-    SB.rngReset(77);
-    var cm = new THREE.MeshBasicMaterial({ color: 0xffe3d0, transparent: true, opacity: 0.85, fog: false });
-    var cm2 = new THREE.MeshBasicMaterial({ color: 0xc9a8e8, transparent: true, opacity: 0.7, fog: false });
-    for (var i = 0; i < 14; i++) {
-      var g = new THREE.Group();
-      var n = 3 + Math.floor(SB.rand() * 3);
-      for (var j = 0; j < n; j++) {
-        var s = new THREE.Mesh(new THREE.SphereGeometry(SB.randRange(9, 22), 8, 6), (j % 2) ? cm2 : cm);
-        s.scale.y = 0.32; s.position.set(SB.randRange(-26, 26), SB.randRange(-2, 3), SB.randRange(-8, 8));
-        g.add(s);
-      }
-      g.position.set(SB.randRange(-420, 420), SB.randRange(120, 210), SB.randRange(-520, 120));
-      g.userData.bx = g.position.x; g.userData.sp = SB.randRange(0.4, 1.1);
-      clouds.push(g); scene.add(g);
+  // Preset table (API.md §3). cam/look = absolute snapshot on setPreset;
+  // follow = offset relative to the hero, used by the chase camera in step().
+  var PRESETS = {
+    cover: {
+      heat: 4, clockMin: 17 * 60 + 24,
+      // r13 integration: probe c7-close — camera SE of the car, low and
+      // close, so the bank sign reads FULL ("SOLMAR NATIONAL BANK") and
+      // the pink car + cruisers fill the frame. The old offset
+      // (10.5,5.4,19.5) put a brown Deco Row facade across half the frame
+      // and clipped the sign to "SOLMAR NA".
+      cam: [8, 5, 12], look: [2, 5, -2],
+      follow: { pos: [8, 5, 12], look: [2, 5, -2] }
+    },
+    onfoot: {
+      heat: 2, clockMin: 18 * 60 + 5,
+      cam: [0, 5.0, 50], look: [0, 1.3, 38],
+      follow: { pos: [0, 5.0, 10], look: [0, 1.3, -2] }
+    },
+    mission: {
+      heat: 5, clockMin: 17 * 60 + 48,
+      cam: [0, 6.2, 26], look: [2, 2.2, 4],
+      follow: { pos: [-2, 6.2, 16], look: [0, 2.2, -6] }
+    },
+    drive: {
+      heat: 4, clockMin: 17 * 60 + 24,
+      // r13 integration: centred chase camera for the drive shot. The cover
+      // offset (8,5,12) puts a maroon facade across ~35% of the frame while
+      // driving north; centred, the road runs straight ahead, car centred.
+      cam: [0, 5, 12], look: [2, 5, -2],
+      follow: { pos: [0, 5, 12], look: [2, 5, -2] }
+    },
+    map: {
+      heat: 0, clockMin: 12 * 60,
+      cam: [0, 220, 0.1], look: [0, 0, 0],
+      follow: { pos: [0, 220, 0.1], look: [0, 0, 0] }
+    },
+    free: {
+      heat: 0, clockMin: 12 * 60,
+      cam: [0, 6, 12], look: [0, 1.5, 0],
+      follow: { pos: [0, 6, 12], look: [0, 1.5, 0] }
     }
-  }
-
-  E.boot = function (opts) {
-    opts = opts || {};
-    if (E.renderer) return E;
-    var w = opts.w || 1280, h = opts.h || 720;
-    var canvas = document.createElement('canvas');
-    canvas.id = 'gl';
-    var host = document.getElementById('game') || document.body;
-    host.appendChild(canvas);
-    E.canvas = canvas;
-    var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, preserveDrawingBuffer: true });
-    renderer.setPixelRatio(1);
-    renderer.setSize(w, h);
-    E.renderer = renderer;
-    var scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x3a2350, 180, 700);
-    E.scene = scene;
-    var camera = new THREE.PerspectiveCamera(62, w / h, 0.1, 2000);
-    camera.position.set(10, 6, 20);
-    E.camera = camera;
-    // Lampu: matahari (-8,150,-420) tetap; hemi langit senja
-    var sun = new THREE.DirectionalLight(0xffb36b, 1.15);
-    sun.position.set(-8, 150, -420);
-    scene.add(sun); E.sun = sun;
-    var hemi = new THREE.HemisphereLight(0x8a6fd0, 0x3d2b1e, 0.85);
-    scene.add(hemi); E.hemi = hemi;
-    var amb = new THREE.AmbientLight(0x604a7a, 0.5);
-    scene.add(amb);
-    // Langit + awan
-    skyMat = skyGradient(0x2b1e5e, 0xff7e47, 0xffb347);
-    buildSky(scene);
-    // Muzzle-flash pool persisten (24 sprite + 1 point light)
-    var ftex = makeDotTexture();
-    for (var i = 0; i < 24; i++) {
-      var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: ftex, color: 0xffc23d, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
-      sp.scale.set(2.4, 2.4, 1); sp.userData.life = 0;
-      flashes.push(sp); scene.add(sp);
-    }
-    flashLight = new THREE.PointLight(0xffb03d, 0, 26);
-    scene.add(flashLight);
-    E.muzzlePos = new THREE.Vector3(0, 1.2, 0);
-    E.heading = 0; E._camMode = 'follow';
-    E._camPos = new THREE.Vector3(10, 6, 20);
-    E._camLook = new THREE.Vector3(0, 1.2, 0);
-    E._focus = new THREE.Vector3(0, 1, 0);
-    // Kota (city.js milik B1; boot dipanggil main.js setelah semua script load)
-    if (SB.city && SB.city.build) { SB.rngReset(1337); SB.city.build(scene); }
-    if (opts.preset) E.setPreset(opts.preset, opts);
-    // Loop internal (main.js WAJIB stop() dulu lalu loop sendiri)
-    lastT = 0;
-    var loop = function (t) {
-      rafId = requestAnimationFrame(loop);
-      var dt = lastT ? Math.min((t - lastT) / 1000, DT_CAP) : 1 / 60;
-      lastT = t;
-      if (!SB.state.paused) E.step(dt);
-      else E.renderer.render(E.scene, E.camera);
-    };
-    rafId = requestAnimationFrame(loop);
-    return E;
   };
 
-  function makeDotTexture() {
-    var c = document.createElement('canvas'); c.width = c.height = 64;
+  function _syncClock() {
+    var hm = Math.floor(SB._clockMin);
+    SB.state.hour = Math.floor(hm / 60) % 24;
+    SB.state.min = hm % 60;
+    // NIGHT 20-05, SUNSET 17-19, DAY 06-16 (API.md §0)
+    SB.state.timeLabel = (SB.state.hour >= 20 || SB.state.hour < 5)
+      ? 'NIGHT' : (SB.state.hour >= 17 ? 'SUNSET' : 'DAY');
+  }
+
+  // ---------- sky: gradient dome + sun disc + drifting clouds ----------
+  function _skyTexture() {
+    var c = document.createElement('canvas'); c.width = 4; c.height = 256;
     var g = c.getContext('2d');
-    var gr = g.createRadialGradient(32, 32, 2, 32, 32, 30);
-    gr.addColorStop(0, 'rgba(255,255,220,1)'); gr.addColorStop(0.4, 'rgba(255,180,60,0.9)');
-    gr.addColorStop(1, 'rgba(255,120,20,0)');
-    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
-    var tx = new THREE.CanvasTexture(c); return tx;
+    var grad = g.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0.0, '#241a4d');
+    grad.addColorStop(0.45, '#7a3d7e');
+    grad.addColorStop(0.72, '#ff7e5f');
+    grad.addColorStop(0.88, '#ffd27a');
+    grad.addColorStop(1.0, '#ffb36b');
+    g.fillStyle = grad; g.fillRect(0, 0, 4, 256);
+    var tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
   }
 
-  E.stop = function () { if (rafId) { cancelAnimationFrame(rafId); rafId = 0; } return E; };
-  E.start = function () {
-    if (rafId) return E; lastT = 0;
-    var loop = function (t) {
-      rafId = requestAnimationFrame(loop);
-      var dt = lastT ? Math.min((t - lastT) / 1000, DT_CAP) : 1 / 60;
-      lastT = t;
-      if (!SB.state.paused) E.step(dt); else E.renderer.render(E.scene, E.camera);
-    };
-    rafId = requestAnimationFrame(loop); return E;
-  };
-
-  E.heroPos = function () {
-    if (SB.vehicles && SB.vehicles.active && SB.vehicles.active.mesh) {
-      var p = SB.vehicles.active.mesh.position; return [p.x, p.z];
-    }
-    if (SB.player && SB.player.hero) {
-      var q = SB.player.hero.position; return [q.x, q.z];
-    }
-    return [E._focus.x, E._focus.z];
-  };
-
-  E.step = function (dt) {
-    if (!E.renderer) return E;
-    SB.state.simTime += dt;
-    // Jam HUD hidup (r9): 1 detik sim = 1 menit game, seperti v3.
-    advanceClock(dt);
-    // Awan drift deterministik
-    for (var i = 0; i < clouds.length; i++) {
-      var c = clouds[i];
-      c.position.x = c.userData.bx + SB.state.simTime * c.userData.sp;
-      if (c.position.x > 460) c.position.x = -460;
-    }
-    // Ped ambient: jalan mondar-mandir di trotoar (pure function simTime).
-    if (SB.city && SB.city.peds) {
-      for (var pi = 0; pi < SB.city.peds.length; pi++) {
-        var pd = SB.city.peds[pi], u = pd.userData || {};
-        var off = Math.sin(SB.state.simTime * 0.22 * (u.sp || 1) + (u.walkPhase || 0)) * 6;
-        if (u.axis === 'x') { pd.position.x = (u.bx || 0) + off; pd.position.z = u.bz || 0; }
-        else { pd.position.x = u.bx || 0; pd.position.z = (u.bz || 0) + off; }
-        pd.position.y = Math.abs(Math.sin(SB.state.simTime * 3 + (u.walkPhase || 0))) * 0.06;
+  function _buildSky() {
+    var sky = new THREE.Mesh(
+      new THREE.SphereGeometry(700, 24, 16),
+      new THREE.MeshBasicMaterial({ map: _skyTexture(), side: THREE.BackSide, fog: false })
+    );
+    E.scene.add(sky);
+    // sun disc toward the directional light
+    var dir = new THREE.Vector3(-8, 150, -420).normalize();
+    var disc = new THREE.Mesh(
+      new THREE.CircleGeometry(26, 32),
+      new THREE.MeshBasicMaterial({ color: 0xffdf9e, fog: false })
+    );
+    disc.position.copy(dir).multiplyScalar(640);
+    disc.lookAt(0, 0, 0);
+    E.scene.add(disc);
+    // clouds: flattened sphere clusters, drift = pure function of simTime
+    _clouds = [];
+    var mat = new THREE.MeshLambertMaterial({
+      color: 0xfff2e0, transparent: true, opacity: 0.85, fog: false
+    });
+    for (var i = 0; i < 10; i++) {
+      var grp = new THREE.Group();
+      var n = 3 + SB.randInt(0, 2);
+      for (var j = 0; j < n; j++) {
+        var s = new THREE.Mesh(new THREE.SphereGeometry(SB.randRange(6, 12), 8, 6), mat);
+        s.scale.y = 0.35;
+        s.position.set(j * SB.randRange(6, 10) - n * 4, SB.randRange(-1, 1), SB.randRange(-3, 3));
+        grp.add(s);
       }
+      var bx = SB.randRange(-220, 220), bz = SB.randRange(-180, 200);
+      grp.position.set(bx, SB.randRange(60, 95), bz);
+      grp.userData.bx = bx;
+      grp.userData.ph = SB.randRange(0, 6.28);
+      E.scene.add(grp);
+      _clouds.push(grp);
     }
-    // Polisi (heli + cruiser) — SATU-SATUNYA pemanggil update di sini.
-    // Di r8 tidak ada yang memanggil police.update sehingga heli diam.
-    if (SB.police && typeof SB.police.update === 'function') SB.police.update(dt);
-    // Flash decay
-    var anyFlash = false;
-    for (var j = 0; j < flashes.length; j++) {
-      var f = flashes[j];
-      if (f.userData.life > 0) {
-        f.userData.life -= dt;
-        f.material.opacity = Math.max(0, f.userData.life / 0.09);
-        if (f.userData.life > 0) anyFlash = true;
-      } else if (f.material.opacity !== 0) f.material.opacity = 0;
-    }
-    flashLight.intensity = anyFlash ? 2.4 : 0;
-    if (anyFlash) flashLight.position.copy(E.muzzlePos);
-    // Update terdaftar (r10): HUD + modul lain membaca state terbaru tiap frame.
-    // Error di satu callback tidak boleh menghentikan yang lain / step ini.
-    for (var ui = 0; ui < SB._updates.length; ui++) {
-      try { SB._updates[ui](dt); } catch (e) {}
-    }
-    // Kamera
-    var cam = E.camera;
-    if (E._camMode === 'fixed') {
-      cam.position.copy(E._camPos);
-      cam.lookAt(E._camLook);
-    } else {
-      var hp = E.heroPos();
-      var fx = hp[0], fz = hp[1];
-      var h = E.heading || 0;
-      var bx = Math.sin(h), bz = Math.cos(h); // forward
-      var dist = 13, height = 5.2;
-      cam.position.set(fx - bx * dist, height, fz - bz * dist);
-      cam.lookAt(fx + bx * 6, 1.4, fz + bz * 6);
-      E._focus.set(fx, 1.2, fz);
-    }
-    E.renderer.render(E.scene, cam);
-    return E;
-  };
+  }
 
-  // Cone spotlight heli: opacity 0.10 (r9 — r8 0.25 memutihkan papan bank).
-  E.spotCone = function () {
-    var geo = new THREE.ConeGeometry(5, 36, 20, 1, true);
-    var mat = new THREE.MeshBasicMaterial({ color: 0xfff2b0, transparent: true, opacity: 0.10, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
-    var m = new THREE.Mesh(geo, mat);
-    return m;
-  };
+  // ---------- muzzle-flash pool (persistent, built once) ----------
+  function _flashTexture() {
+    var c = document.createElement('canvas'); c.width = 64; c.height = 64;
+    var g = c.getContext('2d');
+    var grad = g.createRadialGradient(32, 32, 2, 32, 32, 30);
+    grad.addColorStop(0, 'rgba(255,255,220,1)');
+    grad.addColorStop(0.4, 'rgba(255,200,90,0.85)');
+    grad.addColorStop(1, 'rgba(255,160,40,0)');
+    g.fillStyle = grad; g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  }
+
+  function _buildFlashes() {
+    var tex = _flashTexture();
+    _flashes = [];
+    for (var i = 0; i < 8; i++) {
+      var sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, transparent: true, depthWrite: false
+      }));
+      sp.scale.set(3, 3, 1);
+      sp.visible = false;
+      E.scene.add(sp);
+      _flashes.push({ sprite: sp, life: 0 });
+    }
+    _flashLight = new THREE.PointLight(0xffc860, 0, 18, 2);
+    _flashLight.visible = false;
+    E.scene.add(_flashLight);
+  }
 
   E.burst = function (x, y, z, n) {
-    n = n || 6;
-    var lit = 0;
-    for (var i = 0; i < flashes.length && lit < n; i++) {
-      var f = flashes[i];
-      if (f.userData.life <= 0) {
-        f.position.set(x + SB.randRange(-0.5, 0.5), y + SB.randRange(-0.3, 0.3), z + SB.randRange(-0.5, 0.5));
-        var s = SB.randRange(1.6, 3.2);
-        f.scale.set(s, s, 1); f.userData.life = 0.09; f.material.opacity = 1;
+    var lit = 0, want = n || 1;
+    for (var i = 0; i < _flashes.length && lit < want; i++) {
+      var fl = _flashes[i];
+      if (fl.life <= 0) {
+        fl.sprite.position.set(x, y, z);
+        fl.sprite.visible = true;
+        fl.life = 0.12;
         lit++;
       }
     }
-    E.muzzlePos.set(x, y, z);
+    if (lit > 0 && _flashLight) {
+      _flashLight.position.set(x, y, z);
+      _flashLight.intensity = 60;
+      _flashLight.visible = true;
+    }
+  };
+
+  // Heli spotlight cone (API.md §3): opacity 0.10, radius 5, height 36.
+  // DO NOT raise the opacity — r8's 0.25 whited out the bank sign.
+  E.spotCone = function () {
+    var geo = new THREE.ConeGeometry(5, 36, 24, 1, true);
+    var mat = new THREE.MeshBasicMaterial({
+      color: 0xfff2b0, transparent: true, opacity: 0.10,
+      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending
+    });
+    return new THREE.Mesh(geo, mat);
+  };
+
+  E.heroPos = function () {
+    // Controlled position: the vehicle when driving, the hero on foot.
+    // P.pos() already implements this. The raw hero mesh stays at its
+    // on-foot spawn (0,40) while driving (enterVehicle only hides it),
+    // so reading the mesh directly strands the chase camera, police
+    // pursuit, mission GPS and minimap at the spawn point (r13 find:
+    // cover + drive shots showed the same static view, car absent).
+    if (SB.player && typeof SB.player.pos === 'function') {
+      try {
+        var pp = SB.player.pos();
+        if (pp && typeof pp[0] === 'number' && typeof pp[1] === 'number') return [pp[0], pp[1]];
+      } catch (e) { /* fall through to the mesh */ }
+    }
+    if (SB.player && SB.player.hero && SB.player.hero.position) {
+      return [SB.player.hero.position.x, SB.player.hero.position.z];
+    }
+    if (SB.city && SB.city.spawnPoints && SB.city.spawnPoints[SB.state.preset]) {
+      return SB.city.spawnPoints[SB.state.preset].slice();
+    }
+    return [0, 0];
+  };
+
+  // ---------- chase camera ----------
+  E._chaseCamera = function (dt) {
+    if (!E.camera) return;
+    var hp = E.heroPos();
+    var dx, dy, dz, lx, ly, lz;
+    if (SB.state.preset === 'map') {
+      dx = hp[0]; dy = 220; dz = hp[1] + 0.1;
+      lx = hp[0]; ly = 0; lz = hp[1];
+    } else {
+      dx = hp[0] + _follow.pos[0]; dy = _follow.pos[1]; dz = hp[1] + _follow.pos[2];
+      lx = hp[0] + _follow.look[0]; ly = _follow.look[1]; lz = hp[1] + _follow.look[2];
+    }
+    // smooth follow; deterministic (depends only on dt and state)
+    var k = 1 - Math.exp(-6 * dt);
+    _camPos.x += (dx - _camPos.x) * k;
+    _camPos.y += (dy - _camPos.y) * k;
+    _camPos.z += (dz - _camPos.z) * k;
+    _camLook.x += (lx - _camLook.x) * k;
+    _camLook.y += (ly - _camLook.y) * k;
+    _camLook.z += (lz - _camLook.z) * k;
+    E.camera.position.copy(_camPos);
+    E.camera.lookAt(_camLook);
+  };
+
+  // ---------- the sim tick (API.md §3) ----------
+  // Order: simTime -> clock -> clouds -> peds -> police (ONLY caller here) ->
+  // muzzle-flash decay -> registerUpdate callbacks -> chase camera -> render.
+  // dt LIVE = wall-clock, CAP 1.0 second. NEVER 0.05 in any loop.
+  E.step = function (dt) {
+    if (dt == null || dt <= 0) dt = 1 / 60;
+    if (dt > 1) dt = 1;
+    var S = SB.state;
+    S.simTime += dt;
+    SB._clockMin += dt * S.clockRate;
+    _syncClock();
+
+    // clouds drift (pure function of simTime)
+    for (var i = 0; i < _clouds.length; i++) {
+      var cl = _clouds[i];
+      cl.position.x = cl.userData.bx + Math.sin(S.simTime * 0.01 + cl.userData.ph) * 12;
+    }
+
+    // ambient peds (pure function of simTime, API.md §4)
+    if (SB.city && SB.city.peds) {
+      var peds = SB.city.peds;
+      for (var p = 0; p < peds.length; p++) {
+        var ped = peds[p], pu = ped.userData;
+        var off = Math.sin(S.simTime * 0.22 * pu.sp + pu.walkPhase) * 6;
+        if (pu.axis === 'x') { ped.position.x = pu.bx + off; ped.position.z = pu.bz; }
+        else { ped.position.z = pu.bz + off; ped.position.x = pu.bx; }
+        ped.position.y = Math.abs(Math.sin(S.simTime * 2.2 * pu.sp + pu.walkPhase)) * 0.06;
+      }
+    }
+
+    // ambient traffic (pure function of simTime; wraps along its road)
+    if (SB.city && SB.city.traffic) {
+      var tr = SB.city.traffic;
+      for (var t = 0; t < tr.length; t++) {
+        var car = tr[t], u = car.userData;
+        var along = u.base + S.simTime * u.speed * u.dir;
+        var m = ((along % u.span) + u.span) % u.span;
+        if (u.axis === 'x') {
+          car.position.x = u.min + m; car.position.z = u.lane;
+          car.rotation.y = u.dir > 0 ? 0 : Math.PI;
+        } else {
+          car.position.z = u.min + m; car.position.x = u.lane;
+          car.rotation.y = u.dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+        }
+      }
+    }
+
+    // police: step() is the ONLY caller (API.md §3, §7)
+    if (SB.police && typeof SB.police.update === 'function') {
+      try { SB.police.update(dt); } catch (err) { /* one module must not kill the tick */ }
+    }
+
+    // muzzle-flash decay
+    for (var f = 0; f < _flashes.length; f++) {
+      var fl = _flashes[f];
+      if (fl.life > 0) {
+        fl.life -= dt;
+        if (fl.life <= 0) fl.sprite.visible = false;
+      }
+    }
+    if (_flashLight && _flashLight.visible) {
+      _flashLight.intensity *= Math.max(0, 1 - dt * 12);
+      if (_flashLight.intensity < 1) _flashLight.visible = false;
+    }
+
+    // registerUpdate callbacks (HUD etc. read the freshest state here)
+    for (var u2 = 0; u2 < _updates.length; u2++) {
+      try { _updates[u2](dt); } catch (err2) { /* keep going */ }
+    }
+
+    E._chaseCamera(dt);
+    if (E.renderer && E.scene && E.camera) E.renderer.render(E.scene, E.camera);
+  };
+
+  // ---------- boot / presets / loop ----------
+  E.boot = function (opts) {
+    opts = opts || {};
+    var w = opts.w || 1280, h = opts.h || 720;
+    if (typeof THREE === 'undefined') throw new Error('three.js not loaded');
+    SB.rngReset();
+    var host = document.getElementById('game') || document.body;
+    E.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    E.renderer.setSize(w, h);
+    E.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    E.renderer.shadowMap.enabled = false;
+    E.canvas = E.renderer.domElement;
+    host.appendChild(E.canvas);
+    E.scene = new THREE.Scene();
+    E.scene.background = new THREE.Color(0x1c1440);
+    E.scene.fog = new THREE.Fog(0xe8a56b, 80, 520);
+    var hemi = new THREE.HemisphereLight(0xffe0b3, 0x3a2a4a, 0.85);
+    E.scene.add(hemi);
+    // sun: FIXED position (-8, 150, -420) in every sunset preset (API.md §3)
+    E.sun = new THREE.DirectionalLight(0xffb36b, 1.5);
+    E.sun.position.set(-8, 150, -420);
+    E.scene.add(E.sun);
+    E.scene.add(E.sun.target);
+    _buildSky();
+    E.camera = new THREE.PerspectiveCamera(62, w / h, 0.1, 1200);
+    _camPos = new THREE.Vector3(10.5, 5.4, 19.5);
+    _camLook = new THREE.Vector3(-0.5, 1.6, -4);
+    E.muzzlePos = new THREE.Vector3(0, 1.5, 0);
+    _buildFlashes();
+    if (SB.city && typeof SB.city.build === 'function') {
+      SB.rngReset();
+      SB.city.build(E.scene);
+    }
+    E.start();
     return E;
   };
 
   E.setPreset = function (name, opts) {
+    var p = PRESETS[name] || PRESETS.cover;
     opts = opts || {};
     SB.state.preset = name;
-    var heat = (opts.heat !== undefined) ? opts.heat : SB.state.heat;
-    SB.state.heat = heat;
-    if (opts.hour !== undefined) { SB.state.hour = opts.hour; }
-    if (opts.min !== undefined) { SB.state.min = opts.min; }
-    if (name === 'cover') {
-      SB.state.heat = (opts.heat !== undefined) ? opts.heat : 4;
-      SB.state.hour = 17; SB.state.min = 24; SB.state.timeLabel = 'SUNSET';
-      E._camMode = 'fixed';
-      // Kamera belakang-kanan rendah: mobil pink (0,0,0) UTUH, cruiser di kiri/kanan frame
-      E._camPos.set(10.5, 5.4, 19.5); E._camLook.set(-0.5, 1.6, -4);
-      E._focus.set(0, 1.2, 0); E.heading = 0;
-      SB.state.objective = 'Lose the heat — reach the safehouse';
-      SB.state.inSight = true;
-    } else if (name === 'onfoot') {
-      SB.state.heat = (opts.heat !== undefined) ? opts.heat : 2;
-      SB.state.hour = 18; SB.state.min = 5; SB.state.timeLabel = 'SUNSET';
-      E._camMode = 'fixed';
-      // r12: hero + kamera DI PERSIMPANGAN (0,40) jalan x=0 (spawn pindah
-      // dari (40,62) — juri r11: hero kecil/jauh, fasad kiri ~30% frame).
-      // Kamera lebih dekat (jarak 10, dulu 16) + lebih rendah; jalan silang
-      // z=40 membuka frame kiri-kanan, zebra di depan hero, papan bank
-      // (2,7,-2) terbaca di kejauhan. Koridor x=0 sudah lebar (fasad >=7,5).
-      var sp = (SB.city && SB.city.spawnPoints) ? SB.city.spawnPoints.onfoot : [0, 40];
-      E._camPos.set(0, 5.0, 50); E._camLook.set(0, 1.3, 38);
-      E._focus.set(sp[0], 1.2, sp[1]); E.heading = Math.PI;
-      SB.state.objective = 'Meet Mara at the market';
-      SB.state.inSight = false;
-    } else if (name === 'mission') {
-      SB.state.heat = (opts.heat !== undefined) ? opts.heat : 5;
-      SB.state.hour = 17; SB.state.min = 48; SB.state.timeLabel = 'SUNSET';
-      E._camMode = 'fixed';
-      // r9: kamera DI JALAN x=0 (0,6.2,26) -> papan bank (2,7,-2). r8: kamera
-      // (11,6.2,26) menembus gedung blok (20,20) -> tembok.
-      var bp = (SB.city && SB.city.spawnPoints) ? SB.city.spawnPoints.mission : [2, 10];
-      E._camPos.set(0, 6.2, 26); E._camLook.set(2, 2.2, 4);
-      E._focus.set(bp[0], 1.5, bp[1]); E.heading = 0;
-      SB.state.objective = 'The Big Score — hit Solmar National Bank';
-      SB.state.inSight = true;
-    } else if (name === 'map') {
-      SB.state.heat = (opts.heat !== undefined) ? opts.heat : 0;
-      E._camMode = 'fixed';
-      E._camPos.set(0, 260, 60); E._camLook.set(0, 0, 0);
-      SB.state.timeLabel = 'SUNSET';
-    } else { // free
-      SB.state.heat = (opts.heat !== undefined) ? opts.heat : 0;
-      E._camMode = 'follow'; E.heading = 0;
-      SB.state.objective = '';
-      SB.state.inSight = false;
+    SB.state.heat = (opts.heat != null) ? opts.heat : p.heat;
+    if (opts.hour != null) SB._clockMin = opts.hour * 60 + (opts.min || 0);
+    else SB._clockMin = p.clockMin;
+    _syncClock();
+    _follow = p.follow;
+    // snap camera to the preset (no lerp on the first frame)
+    if (_camPos) _camPos.set(p.cam[0], p.cam[1], p.cam[2]);
+    if (_camLook) _camLook.set(p.look[0], p.look[1], p.look[2]);
+    if (E.camera) { E.camera.position.copy(_camPos); E.camera.lookAt(_camLook); }
+    // optional placement hooks (B2 defines these; engine works without them)
+    if (SB.player && typeof SB.player.placeHero === 'function') {
+      try { SB.player.placeHero(name); } catch (err) { /* keep going */ }
     }
-    // Basis jam preset -> _clockMin (advanceClock yang memajukan dari sini).
-    SB._clockMin = (SB.state.hour || 17) * 60 + (SB.state.min || 0);
-    if (SB.police && SB.police.setStars) SB.police.setStars(SB.state.heat);
-    return E;
+    if (SB.vehicles && typeof SB.vehicles.placeForPreset === 'function') {
+      try { SB.vehicles.placeForPreset(name); } catch (err2) { /* keep going */ }
+    }
+    return p;
   };
 
   E.bootFromQuery = function () {
-    var q = new URLSearchParams(location.search);
-    var scene = q.get('scene') || 'cover';
-    var opts = { preset: scene };
-    if (q.get('heat') !== null) opts.heat = parseInt(q.get('heat'), 10);
-    if (q.get('hour') !== null) opts.hour = parseInt(q.get('hour'), 10);
-    E.boot(opts);
+    var q = {};
+    var s = (window.location.search || '').replace(/^\?/, '');
+    if (s) {
+      s.split('&').forEach(function (kv) {
+        var parts = kv.split('=');
+        if (parts[0]) q[decodeURIComponent(parts[0])] = decodeURIComponent(parts[1] || '');
+      });
+    }
+    var scene = q.scene || 'cover';
+    E.boot({ preset: scene });
+    var opts = {};
+    if (q.heat != null && q.heat !== '') opts.heat = parseInt(q.heat, 10);
+    if (q.hour != null && q.hour !== '') opts.hour = parseInt(q.hour, 10);
+    E.setPreset(scene, opts);
     return E;
   };
 
+  E.start = function () {
+    if (_running) return;
+    _running = true;
+    _lastPerf = performance.now();
+    var loop = function () {
+      if (!_running) return;
+      _rafId = requestAnimationFrame(loop);
+      var now = performance.now();
+      var dt = (now - _lastPerf) / 1000;
+      _lastPerf = now;
+      if (dt > 1) dt = 1;      // CAP 1.0 — never 0.05
+      if (dt <= 0) dt = 1 / 60;
+      if (!SB.state.paused) E.step(dt);
+      else if (E.renderer && E.scene && E.camera) E.renderer.render(E.scene, E.camera);
+    };
+    _rafId = requestAnimationFrame(loop);
+  };
+
+  E.stop = function () {
+    _running = false;
+    if (_rafId) cancelAnimationFrame(_rafId);
+    _rafId = 0;
+  };
+
+  // Screenshot: render, then JPEG data-URL (API.md §3). This is THE way to
+  // screenshot — never Playwright page.screenshot (TIMEOUT in swiftshader).
   E.shot = function () {
-    if (!E.renderer) return '';
+    if (!E.renderer || !E.canvas) return '';
     E.renderer.render(E.scene, E.camera);
     return E.canvas.toDataURL('image/jpeg', 0.92);
   };

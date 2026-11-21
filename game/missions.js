@@ -1,415 +1,343 @@
-/* missions.js — 8 misi cerita "Solmar Bay" (gta6-01, rebuild r12).
-   Kontrak: game/API.md §8. Deterministik penuh (tanpa acak / jam dinding).
-   Misi 1: +$500 / REP +130. Misi 2: standoff Saltjack (boss hp 220,
-   userData.boss + enforcer=true). Marker objektif: berlian merah KECIL.
-   r9 FIX (juri buta r8, 21 vs 32): M.active sekarang membawa objective /
-   stage / stageTotal / target / payout (sesuai API §8 — r8 hanya punya
-   {id, name, step, timer} sehingga HUD + GPS tidak pernah dapat target),
-   dan SETIAP transisi misi memanggil SB.hud.update() LANGSUNG.
-   Alasan: SB.registerUpdate TIDAK PERNAH didefinisikan di game mana pun,
-   jadi hud.update() r8 hanya jalan sekali saat init — panel misi macet di
-   "NO ACTIVE MISSION" walau misi aktif di state. Dorongan langsung ini
-   membuat panel + GPS benar walau loop HUD macet. */
+// game/missions.js — SB.missions: 8 misi "Solmar Bay" (r13, ditulis fresh dari API.md §8).
+// Kontrak: API.md §8. Semua angka deterministik (tanpa acak, tanpa jam dinding).
+// Main loop memanggil SB.missions.update(dt) tiap frame saat !SB.state.paused.
 (function () {
-  var SB = window.SB;
-  if (!SB.state) SB.state = {};
-  var S = SB.state;
+  'use strict';
 
-  function dist(ax, az, bx, bz) {
-    var dx = ax - bx, dz = az - bz;
-    return Math.sqrt(dx * dx + dz * dz);
-  }
-  function heroXZ() {
-    if (SB.player && typeof SB.player.pos === 'function') return SB.player.pos();
-    if (SB.engine && typeof SB.engine.heroPos === 'function') return SB.engine.heroPos();
-    return [0, 0];
-  }
+  var SB = window.SB || (window.SB = {});
 
-  /* Definisi 8 misi. steps: capai titik (radius meter) -> lanjut.
-     standoff: langkah yang memicu standoff bos (misi 2, langkah 2). */
-  var DEFS = [
-    { id: 1, name: 'First Fare', payout: 500, rep: 130, district: 'Downtown',
-      contact: 'mara', timer: 180,
-      steps: [
-        { objective: 'Jemput penumpang di Deco Row', at: [120, 40], radius: 8 },
-        { objective: 'Antar penumpang ke Palmetto Heights', at: [200, -120], radius: 8 }
+  // ---------------------------------------------------------------------------
+  // Definisi misi. Tiap stage menunjuk satu distrik; posisi objektif diambil
+  // dari SB.city.districts saat misi dimulai (API §4: distrik dipakai misi).
+  // ---------------------------------------------------------------------------
+  var MISSION_DEFS = [
+    { id: 1, name: 'First Fare', payout: 500, district: 'Deco Row', rep: 130, time: 180,
+      stages: [
+        { objective: 'Jemput penumpang di Deco Row', district: 'Deco Row' },
+        { objective: 'Antar penumpang ke Coral Strand', district: 'Coral Strand' }
       ] },
-    { id: 2, name: 'The Package', payout: 1200, rep: 160, district: 'Old Mercado',
-      contact: 'mara', timer: 300,
-      steps: [
-        { objective: 'Ambil paket di Old Mercado', at: [-80, 120], radius: 8 },
-        { objective: 'Saltjack menghadang — kalahkan anak buahnya', at: [-200, 200], radius: 14, standoff: true },
-        { objective: 'Antar paket ke Pelican Marina', at: [300, 300], radius: 8 }
+    { id: 2, name: 'The Package', payout: 1200, district: 'Old Mercado', rep: 150, time: 240,
+      stages: [
+        { objective: 'Ambil paket di Old Mercado', district: 'Old Mercado' },
+        { objective: 'Antar paket ke Bayline Docks', district: 'Bayline Docks' }
       ] },
-    { id: 3, name: 'Hot Wheels', payout: 1800, rep: 200, district: 'Downtown',
-      contact: 'jax', timer: 240,
-      steps: [
-        { objective: 'Curi Comet GT di Downtown', at: [40, -40], radius: 8 },
-        { objective: 'Bawa ke bengkel Jax di Palmetto Heights', at: [180, -160], radius: 8 }
+    { id: 3, name: 'Hot Wheels', payout: 1800, district: 'Neon Mile', rep: 180, time: 240,
+      stages: [
+        { objective: 'Curi mobil sport di Neon Mile', district: 'Neon Mile' },
+        { objective: 'Bawa mobil ke Chop Shop', district: 'Keystone Field' }
       ] },
-    { id: 4, name: 'Night Run', payout: 2500, rep: 240, district: 'Neon Mile',
-      contact: 'lucia', timer: 300,
-      steps: [
-        { objective: 'Checkpoint 1 — Neon Mile', at: [-40, -180], radius: 8 },
-        { objective: 'Checkpoint 2 — Deco Row', at: [140, -60], radius: 8 },
-        { objective: 'Checkpoint 3 — Coral Strand', at: [-160, 260], radius: 8 }
+    { id: 4, name: 'Night Run', payout: 2500, district: 'Palmetto Heights', rep: 200, time: 300,
+      stages: [
+        { objective: 'Jemput klien di Palmetto Heights', district: 'Palmetto Heights' },
+        { objective: 'Antar klien ke Pelican Marina', district: 'Pelican Marina' }
       ] },
-    { id: 5, name: 'Chop Shop', payout: 3200, rep: 280, district: 'Keystone Field',
-      contact: 'jax', timer: 300,
-      steps: [
-        { objective: 'Ambil mobil pertama di Keystone Field', at: [-240, 60], radius: 8 },
-        { objective: 'Ambil mobil kedua di Bayline Docks', at: [320, -260], radius: 8 },
-        { objective: 'Kirim ke chop shop Old Mercado', at: [-120, 140], radius: 8 }
+    { id: 5, name: 'Chop Shop', payout: 3200, district: 'Keystone Field', rep: 220, time: 300,
+      stages: [
+        { objective: 'Ambil mobil curian di Keystone Field', district: 'Keystone Field' },
+        { objective: 'Serahkan ke bengkel Jax', district: 'Downtown' }
       ] },
-    { id: 6, name: 'Harbor Lights', payout: 3200, rep: 280, district: 'Bayline Docks',
-      contact: 'lucia', timer: 300,
-      steps: [
-        { objective: 'Temui Lucia di Bayline Docks', at: [320, -240], radius: 8 },
-        { objective: 'Kabur lewat Pelican Marina', at: [280, 320], radius: 10 }
+    { id: 6, name: 'Harbor Lights', payout: 3200, district: 'Pelican Marina', rep: 220, time: 300,
+      stages: [
+        { objective: 'Temui kontak di Pelican Marina', district: 'Pelican Marina' },
+        { objective: 'Ambil kiriman di Bayline Docks', district: 'Bayline Docks' }
       ] },
-    { id: 7, name: 'Heat', payout: 4200, rep: 340, district: 'Downtown',
-      contact: 'mara', timer: 240,
-      steps: [
-        { objective: 'Lepas dari kejaran di Downtown', at: [60, 80], radius: 10 },
-        { objective: 'Sembunyi di safehouse Palmetto Heights', at: [220, -200], radius: 8 }
+    { id: 7, name: 'Heat', payout: 4200, district: 'Downtown', rep: 280, time: 360,
+      stages: [
+        { objective: 'Hadapi kru Saltjack di Downtown', district: 'Downtown', standoff: true },
+        { objective: 'Kabur dari kejaran polisi', district: 'Coral Strand' }
       ] },
-    { id: 8, name: 'The Big Score', payout: 5000, rep: 500, district: 'Downtown',
-      contact: 'mara', timer: 420,
-      steps: [
-        { objective: 'Masuk Solmar National Bank', at: [2, -2], radius: 10 },
-        { objective: 'Buka brankas — tahan posisi', at: [2, -2], radius: 10, hold: 6 },
-        { objective: 'Kabur ke Coral Strand', at: [-300, 350], radius: 10 }
+    { id: 8, name: 'The Big Score', payout: 5000, district: 'Downtown', rep: 350, time: 420,
+      stages: [
+        { objective: 'Masuk ke Solmar National Bank', district: 'Downtown' },
+        { objective: 'Bawa hasil rampokan ke safehouse', district: 'Palmetto Heights' }
       ] }
   ];
 
-  var M = SB.missions = SB.missions || {};
-  M.list = DEFS.map(function (d) {
+  var STAGE_RADIUS = 12;    // meter: hero dianggap sampai di objektif
+  var MARKER_SIZE = 1.2;    // berlian merah KECIL (jangan raksasa)
+  var MARKER_HEIGHT = 3;    // tinggi melayang marker di atas tanah
+
+  var M = SB.missions || (SB.missions = {});
+
+  // Daftar publik (API §8): {id, name, payout, district, done}
+  M.list = MISSION_DEFS.map(function (d) {
     return { id: d.id, name: d.name, payout: d.payout, district: d.district, done: false };
   });
-  M.cash = 0;
-  M.rep = 0;
-  M.active = null;
-  M.marker = null;      /* mesh THREE (berlian kecil) atau null */
-  M.markerAt = null;    /* [x, z] posisi logis marker */
-  M.boss = null;        /* Saltjack (misi 2) */
-  M.standoff = null;    /* {count, total, boss, enforcers:[...]} */
 
-  function defById(id) {
-    for (var i = 0; i < DEFS.length; i++) if (DEFS[i].id === id) return DEFS[i];
+  M.cash = 0;               // ledger misi (API §0)
+  M.rep = 0;                // ledger REP misi (API §0)
+  M.active = null;          // misi aktif {id, name, objective, timer, stage, stages, stageIndex}
+  M.marker = null;          // mesh berlian merah (dibuat malas saat misi aktif)
+  M.markerTarget = null;    // {x, z, district} objektif saat ini
+  M.standoff = 4;           // kru Saltjack tersisa (misi 7); 4 -> 0
+
+  // ---------------------------------------------------------------------------
+  // Helper internal
+  // ---------------------------------------------------------------------------
+  function findDef(id) {
+    for (var i = 0; i < MISSION_DEFS.length; i++) {
+      if (MISSION_DEFS[i].id === id) return MISSION_DEFS[i];
+    }
     return null;
   }
-  function listById(id) {
-    for (var i = 0; i < M.list.length; i++) if (M.list[i].id === id) return M.list[i];
+
+  function districtCenter(name) {
+    var ds = SB.city && SB.city.districts;
+    if (Array.isArray(ds)) {
+      for (var i = 0; i < ds.length; i++) {
+        if (ds[i] && ds[i].name === name) return { x: ds[i].cx, z: ds[i].cz };
+      }
+    }
     return null;
   }
 
-  /* --- marker berlian merah KECIL (jangan raksasa) --- */
-  function makeMarkerMesh() {
-    if (typeof THREE === 'undefined' || !SB.engine || !SB.engine.scene) return null;
-    var geo = new THREE.OctahedronGeometry(0.35, 0);
-    var mat = new THREE.MeshBasicMaterial({ color: 0xff2233 });
-    var mesh = new THREE.Mesh(geo, mat);
-    mesh.visible = true;
-    SB.engine.scene.add(mesh);
-    return mesh;
+  function heroPos() {
+    if (SB.engine && typeof SB.engine.heroPos === 'function') {
+      var p = SB.engine.heroPos();
+      if (p && p.length >= 2 && typeof p[0] === 'number') return { x: p[0], z: p[1] };
+    }
+    if (SB.player && typeof SB.player.pos === 'function') {
+      var q = SB.player.pos();
+      if (q && q.length >= 2 && typeof q[0] === 'number') return { x: q[0], z: q[1] };
+    }
+    return null;
   }
-  function placeMarker(at) {
-    M.markerAt = at ? [at[0], at[1]] : null;
-    if (!M.marker) M.marker = makeMarkerMesh();
-    if (M.marker && at) M.marker.position.set(at[0], 1.6, at[1]);
-    if (M.marker) M.marker.visible = !!at;
-    return M.markerAt;
+
+  function fmtTime(sec) {
+    var s = Math.max(0, Math.ceil(sec));
+    var m = Math.floor(s / 60);
+    var r = s % 60;
+    return m + ':' + (r < 10 ? '0' : '') + r;
   }
-  function clearMarker() {
-    M.markerAt = null;
-    if (M.marker && SB.engine && SB.engine.scene) {
-      SB.engine.scene.remove(M.marker);
+
+  function currentStage() {
+    if (!M.active) return null;
+    var def = findDef(M.active.id);
+    if (!def) return null;
+    return def.stages[M.active.stageIndex] || null;
+  }
+
+  function resolveTarget() {
+    var st = currentStage();
+    if (!st) { M.markerTarget = null; return; }
+    var c = districtCenter(st.district);
+    M.markerTarget = c ? { x: c.x, z: c.z, district: st.district } : null;
+  }
+
+  function setObjective(text) {
+    if (SB.state) SB.state.objective = text || '';
+  }
+
+  // Panel misi + GPS hidup: panggil hud.update + map.render langsung tiap
+  // transisi (API §8, catatan r9). Aman bila hud/map belum ada.
+  function notifyHUD() {
+    try {
+      if (SB.hud && typeof SB.hud.update === 'function') SB.hud.update();
+    } catch (e) {}
+    try {
+      if (SB.map && typeof SB.map.render === 'function') SB.map.render();
+    } catch (e) {}
+  }
+
+  // ---------------------------------------------------------------------------
+  // Marker objektif: berlian merah KECIL (oktahedron), melayang + berputar.
+  // Dibuat malas — tanpa THREE/scene, misi tetap jalan sebagai data.
+  // ---------------------------------------------------------------------------
+  function ensureMarker() {
+    if (M.marker) return M.marker;
+    if (typeof THREE === 'undefined') return null;
+    if (!SB.engine || !SB.engine.scene) return null;
+    try {
+      var geo = new THREE.OctahedronGeometry(MARKER_SIZE, 0);
+      var mat = new THREE.MeshBasicMaterial({ color: 0xff2233 });
+      var mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(0, MARKER_HEIGHT, 0);
+      SB.engine.scene.add(mesh);
+      M.marker = mesh;
+    } catch (e) {
       M.marker = null;
-    } else if (M.marker) {
-      M.marker.visible = false;
+    }
+    return M.marker;
+  }
+
+  function placeMarker() {
+    var mesh = ensureMarker();
+    if (mesh && M.markerTarget) {
+      mesh.position.set(M.markerTarget.x, MARKER_HEIGHT, M.markerTarget.z);
+      mesh.visible = true;
+    } else if (mesh) {
+      mesh.visible = false;
     }
   }
-  M.markerPos = function () { return M.markerAt ? [M.markerAt[0], M.markerAt[1]] : null; };
 
-  /* --- r9: M.active yang KAYA (sesuai API §8) --- */
-  function currentStep() {
-    if (!M.active) return null;
-    var d = defById(M.active.id);
-    if (!d) return null;
-    return d.steps[M.active.step] || null;
+  function hideMarker() {
+    if (M.marker && SB.engine && SB.engine.scene) {
+      try { SB.engine.scene.remove(M.marker); } catch (e) {}
+    }
+    M.marker = null;
   }
-  function refreshActive() {
+
+  // ---------------------------------------------------------------------------
+  // API publik (API §8)
+  // ---------------------------------------------------------------------------
+
+  // Mulai misi: set aktif + objektif stage 1 + marker + panel hidup.
+  M.start = function (id) {
+    var def = findDef(id);
+    if (!def) return false;
+    if (M.active && M.active.id === id) return true;
+    M.active = {
+      id: def.id,
+      name: def.name,
+      objective: def.stages[0].objective,
+      timer: def.time,
+      stage: 1,
+      stages: def.stages.length,
+      stageIndex: 0
+    };
+    resolveTarget();
+    setObjective(M.active.objective);
+    placeMarker();
+    notifyHUD();
+    return true;
+  };
+
+  // Selesaikan misi: +payout, +REP, tandai done, bersihkan aktif + marker.
+  // Misi 1 = +$500 / REP +130 (API §8).
+  M.complete = function (id) {
+    var def = findDef(id);
+    if (!def) return false;
+    M.cash += def.payout;
+    M.rep += def.rep;
+    if (typeof SB.cash === 'number') SB.cash += def.payout;
+    if (SB.state && typeof SB.state.rep === 'number') SB.state.rep += def.rep;
+    for (var i = 0; i < M.list.length; i++) {
+      if (M.list[i].id === id) M.list[i].done = true;
+    }
+    if (M.active && M.active.id === id) {
+      M.active = null;
+      setObjective('');
+      hideMarker();
+    }
+    notifyHUD();
+    return true;
+  };
+
+  // Gagal karena waktu habis: aktif dibersihkan, tanpa payout/REP.
+  function failActive() {
     if (!M.active) return;
-    var d = defById(M.active.id);
-    var step = d ? d.steps[M.active.step] : null;
-    M.active.name = d ? d.name : M.active.name;
-    M.active.title = M.active.name;
-    M.active.stage = M.active.step + 1;
-    M.active.stageTotal = d ? d.steps.length : 1;
-    M.active.objective = step ? step.objective : '';
-    M.active.target = step && step.at ? [step.at[0], step.at[1]] : null;
-    M.active.payout = d ? d.payout : 0;
-    M.active.rep = d ? d.rep : 0;
-    M.active.contact = d ? d.contact : '';
+    M.active = null;
+    setObjective('');
+    hideMarker();
+    notifyHUD();
   }
 
-  function syncState() {
-    if (!M.active) {
-      S.mission = null;
-      S.objective = '';
-      S.missionTarget = null;
+  // Pindah ke stage berikut; habis stage -> complete().
+  function advanceStage() {
+    if (!M.active) return;
+    var def = findDef(M.active.id);
+    if (!def) return;
+    M.active.stageIndex += 1;
+    if (M.active.stageIndex >= def.stages.length) {
+      M.complete(M.active.id);
       return;
     }
-    refreshActive();
-    var a = M.active;
-    S.mission = { id: a.id, title: a.name, name: a.name, contact: a.contact,
-      stage: a.stage, stageTotal: a.stageTotal,
-      objective: a.objective, payout: a.payout, rep: a.rep,
-      timer: a.timer, target: a.target ? [a.target[0], a.target[1]] : null };
-    S.objective = a.objective;
-    S.missionTarget = a.target ? [a.target[0], a.target[1]] : null;
+    var st = def.stages[M.active.stageIndex];
+    M.active.stage = M.active.stageIndex + 1;
+    M.active.objective = st.objective;
+    resolveTarget();
+    setObjective(st.objective);
+    placeMarker();
+    notifyHUD();
   }
 
-  /* Dorong HUD + peta LANGSUNG (tanpa menunggu loop). Semua dipagari
-     try/catch + typeof agar aman saat SB.hud / SB.map belum ada (harness). */
-  function pokeHUD() {
-    if (SB.hud && typeof SB.hud.update === 'function') {
-      try { SB.hud.update(); } catch (e) {}
-    }
-    if (SB.map && typeof SB.map.render === 'function') {
-      try { SB.map.render(); } catch (e) {}
-    }
-  }
-  function notifyHUD(ev, extra) {
-    syncState();
-    if (SB.emit) {
-      try { SB.emit(ev, extra || M.getHUD() || {}); } catch (e) {}
-    }
-    pokeHUD();
-  }
-
-  /* Snapshot misi aktif untuk HUD (B4 hud.js) — null bila tidak ada misi.
-     Selama M.active non-null, getHUD() SELALU non-null: panel HUD tidak
-     boleh lagi menampilkan "NO ACTIVE MISSION" saat misi berjalan. */
-  M.getHUD = function () {
-    if (!M.active) return null;
-    refreshActive();
-    var a = M.active;
-    return { id: a.id, name: a.name, title: a.name, contact: a.contact,
-      stage: a.stage, stageTotal: a.stageTotal, objective: a.objective,
-      timer: a.timer, payout: a.payout, rep: a.rep, demo: !!a.demo,
-      target: a.target ? [a.target[0], a.target[1]] : null };
-  };
-
-  /* GPS untuk peta (B4 map.js) — jarak hero ke objektif saat ini. */
-  M.getGPS = function () {
-    if (!M.active) return null;
-    refreshActive();
-    var a = M.active;
-    if (!a.target) return null;
-    var p = heroXZ();
-    return { label: a.objective, distance: dist(p[0], p[1], a.target[0], a.target[1]),
-      target: [a.target[0], a.target[1]] };
-  };
-
-  /* --- standoff misi 2: Saltjack + 3 enforcer, total counter 4 --- */
-  function makePedMesh(color) {
-    if (typeof THREE === 'undefined' || !SB.engine || !SB.engine.scene) return null;
-    var g = new THREE.Group();
-    var body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.4),
-      new THREE.MeshLambertMaterial({ color: color }));
-    body.position.y = 1.05;
-    var head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 6),
-      new THREE.MeshLambertMaterial({ color: 0xd9a066 }));
-    head.position.y = 1.85;
-    g.add(body); g.add(head);
-    SB.engine.scene.add(g);
-    return g;
-  }
-  M.spawnStandoff = function () {
-    if (M.standoff) return M.standoff;
-    var boss = { name: 'Saltjack', hp: 220, maxHp: 220, counted: false,
-      userData: { boss: true, enforcer: true }, pos: [-200, 200], mesh: null };
-    boss.mesh = makePedMesh(0x881111);
-    if (boss.mesh) boss.mesh.position.set(-200, 0, 200);
-    var enforcers = [];
-    var offs = [[-6, 3], [5, 4], [0, -6]];
-    for (var i = 0; i < 3; i++) {
-      var e = { name: 'Enforcer ' + (i + 1), hp: 100, maxHp: 100, counted: false,
-        userData: { boss: false, enforcer: true },
-        pos: [-200 + offs[i][0], 200 + offs[i][1]], mesh: null };
-      e.mesh = makePedMesh(0x222222);
-      if (e.mesh) e.mesh.position.set(e.pos[0], 0, e.pos[1]);
-      enforcers.push(e);
-    }
-    M.boss = boss;
-    M.standoff = { count: 4, total: 4, boss: boss, enforcers: enforcers };
-    if (SB.police) {
-      if (!SB.police.cops) SB.police.cops = [];
-      SB.police.cops.push(boss);
-      for (var j = 0; j < enforcers.length; j++) SB.police.cops.push(enforcers[j]);
-    }
-    return M.standoff;
-  };
-
-  /* Dipanggil SB.player saat ped userData.boss=true tumbang (Saltjack 4->3). */
-  M.standoffDown = function () {
-    if (!M.standoff || M.standoff.count <= 0) return M.standoff ? M.standoff.count : 0;
-    M.standoff.count -= 1;
-    if (SB.emit) { try { SB.emit('standoff-down', { count: M.standoff.count }); } catch (e) {} }
-    return M.standoff.count;
-  };
-
-  /* Damage lewat combat: bos mati -> standoffDown sekali saja. */
-  M.damageBoss = function (n) {
-    if (!M.boss || M.boss.hp <= 0) return 0;
-    M.boss.hp = Math.max(0, M.boss.hp - n);
-    if (M.boss.hp <= 0 && !M.boss.counted) {
-      M.boss.counted = true;
-      M.standoffDown();
-    }
-    return M.boss.hp;
-  };
-  M.damageEnforcer = function (i, n) {
-    if (!M.standoff || !M.standoff.enforcers[i]) return 0;
-    var e = M.standoff.enforcers[i];
-    if (e.hp <= 0) return 0;
-    e.hp = Math.max(0, e.hp - n);
-    if (e.hp <= 0 && !e.counted) {
-      e.counted = true;
-      M.standoffDown();
-    }
-    return e.hp;
-  };
-
-  M.start = function (id) {
-    var d = defById(id);
-    if (!d) return false;
-    var entry = listById(id);
-    if (entry && entry.done) return false;
-    if (M.active && M.active.id === id) return true;
-    M.active = { id: d.id, name: d.name, step: 0, timer: d.timer, demo: false, holdT: 0 };
-    refreshActive();
-    placeMarker(d.steps[0].at);
-    notifyHUD('mission-start', { id: d.id, name: d.name });
-    return true;
-  };
-
-  M.complete = function (id) {
-    var d = defById(id);
-    if (!d) return false;
-    var entry = listById(id);
-    if (!entry || entry.done) return false;
-    if (!M.active || M.active.id !== id) return false;
-    entry.done = true;
-    M.cash += d.payout;
-    M.rep += d.rep;
-    S.cash = (S.cash || 0) + d.payout;
-    S.rep = (S.rep || 0) + d.rep;
-    S.missionsDone = (S.missionsDone || 0) + 1;
-    M.active = null;
-    clearMarker();
-    notifyHUD('mission-complete', { id: d.id, name: d.name, payout: d.payout, rep: d.rep });
-    return true;
-  };
-
-  M.fail = function () {
-    if (!M.active) return false;
-    var id = M.active.id;
-    M.active = null;
-    clearMarker();
-    notifyHUD('mission-fail', { id: id });
-    return true;
-  };
-
-  /* Staging QUIET: set misi aktif + objektif tanpa dialog. Idempotent.
-     Tanpa emit (jangan toast) tapi tetap poke HUD agar panel misi benar. */
-  M.demo = function (id) {
-    var want = id || 8;
-    if (M.active && M.active.id === want && M.active.demo) return M.active;
-    if (M.active && M.active.id !== want) { M.active = null; clearMarker(); }
-    var d = defById(want);
-    if (!d) return null;
-    M.active = { id: d.id, name: d.name, step: 0, timer: d.timer, demo: true, holdT: 0 };
-    refreshActive();
-    placeMarker(d.steps[0].at);
-    syncState();
-    pokeHUD();
-    return M.active;
-  };
-
+  // Dipanggil main loop TIAP frame (wajib; tanpa ini misi tidak jalan).
+  // Main loop men-gate pada !SB.state.paused; guard di sini juga aman.
   M.update = function (dt) {
     if (!M.active) return;
-    if (dt <= 0) dt = 0;
+    if (SB.state && SB.state.paused) return;
+    if (typeof dt !== 'number' || dt <= 0) return;
+    if (dt > 1) dt = 1;
     M.active.timer -= dt;
-    if (M.active.timer <= 0) { M.fail(); return; }
-    var d = defById(M.active.id);
-    var step = d.steps[M.active.step];
-    if (!step) { M.complete(d.id); return; }
-    /* marker bob deterministik dari simTime */
-    if (M.marker && M.markerAt) {
-      var t = (S.simTime || 0);
-      M.marker.position.y = 1.6 + Math.sin(t * 2) * 0.15;
-      M.marker.rotation.y = t * 1.5;
-    }
-    /* langkah standoff: spawn bos saat langkah tercapai */
-    if (step.standoff) {
-      if (!M.standoff) M.spawnStandoff();
-      if (M.standoff.count <= 0) {
-        M.active.step += 1;
-        M.active.holdT = 0;
-        if (M.active.step >= d.steps.length) { M.complete(d.id); return; }
-        placeMarker(d.steps[M.active.step].at);
-        refreshActive();
-        notifyHUD('mission-stage', { id: d.id, stage: M.active.step + 1 });
-        return;
-      }
-      /* bos tumbang lewat combat tanpa jalur player: deteksi di sini */
-      if (M.boss && M.boss.hp <= 0 && !M.boss.counted) {
-        M.boss.counted = true;
-        M.standoffDown();
-      }
-      /* enforcer tumbang lewat combat: deteksi di sini juga. damageEnforcer
-         tidak pernah dipanggil dari game (hanya harness), jadi tanpa ini
-         counter standoff tidak pernah mencapai 0 dan misi 2 soft-lock.
-         Pengaman yang sama persis seperti bos di atas. */
-      if (M.standoff) {
-        for (var k = 0; k < M.standoff.enforcers.length; k++) {
-          var ef = M.standoff.enforcers[k];
-          if (ef.hp <= 0 && !ef.counted) { ef.counted = true; M.standoffDown(); }
-        }
-      }
+    if (M.active.timer <= 0) {
+      M.active.timer = 0;
+      failActive();
       return;
     }
-    var p = heroXZ();
-    if (step.at && dist(p[0], p[1], step.at[0], step.at[1]) <= step.radius) {
-      if (step.hold) {
-        M.active.holdT += dt;
-        if (M.active.holdT < step.hold) return;
+    // Marker mengambang + berputar — murni fungsi simTime (deterministik).
+    if (M.marker) {
+      var t = (SB.state && typeof SB.state.simTime === 'number') ? SB.state.simTime : 0;
+      M.marker.position.y = MARKER_HEIGHT + Math.sin(t * 2) * 0.5;
+      M.marker.rotation.y += dt;
+      if (M.markerTarget) {
+        M.marker.position.x = M.markerTarget.x;
+        M.marker.position.z = M.markerTarget.z;
       }
-      M.active.step += 1;
-      M.active.holdT = 0;
-      if (M.active.step >= d.steps.length) { M.complete(d.id); return; }
-      var next = d.steps[M.active.step];
-      if (next.standoff && !M.standoff) M.spawnStandoff();
-      placeMarker(next.at);
-      refreshActive();
-      notifyHUD('mission-stage', { id: d.id, stage: M.active.step + 1 });
+    }
+    // Resolve target malas (kota mungkin baru selesai dibangun).
+    if (!M.markerTarget) {
+      resolveTarget();
+      placeMarker();
+    }
+    if (!M.markerTarget) return;
+    var hp = heroPos();
+    if (!hp) return;
+    var dx = hp.x - M.markerTarget.x;
+    var dz = hp.z - M.markerTarget.z;
+    var dist = Math.sqrt(dx * dx + dz * dz);
+    var st = currentStage();
+    // Stage standoff (misi 7) selesai via standoffDown(), bukan jarak.
+    if (st && st.standoff) return;
+    if (dist <= STAGE_RADIUS) advanceStage();
+  };
+
+  // Staging QUIET: set misi aktif + objektif tanpa dialog (API §8).
+  // Dipakai preset mission/big-score: The Big Score aktif di depan bank.
+  M.demo = function () {
+    M.start(8);
+  };
+
+  // Dipanggil SB.player saat ped userData.boss=true tumbang (API §8).
+  // Counter standoff turun; Saltjack 4 -> 3 -> ... -> 0 lalu stage lanjut.
+  M.standoffDown = function () {
+    if (M.standoff > 0) M.standoff -= 1;
+    var st = currentStage();
+    if (M.active && M.active.id === 7 && st && st.standoff && M.standoff <= 0) {
+      advanceStage();
+    } else {
+      notifyHUD();
     }
   };
 
-  /* Reset penuh (harness / determinisme 2x). */
-  M.reset = function () {
-    M.list.forEach(function (e) { e.done = false; });
-    M.cash = 0; M.rep = 0;
-    M.active = null;
-    M.boss = null; M.standoff = null;
-    S.cash = 0; S.rep = 0; S.missionsDone = 0;
-    clearMarker();
-    syncState();
-    pokeHUD();
+  // GPS numerik untuk panel misi, mis. "objective 122 m away".
+  // Kosong bila tidak ada misi aktif / target belum ter-resolve.
+  M.getGPS = function () {
+    if (!M.active || !M.markerTarget) return '';
+    var hp = heroPos();
+    if (!hp) return '';
+    var dx = hp.x - M.markerTarget.x;
+    var dz = hp.z - M.markerTarget.z;
+    var dist = Math.round(Math.sqrt(dx * dx + dz * dz));
+    return 'objective ' + dist + ' m away';
   };
 
-  M.def = defById;
-  syncState();
+  // Data panel misi untuk HUD (API §8 + juri r12): nama / STAGE x/y / NEXT /
+  // timer / PAYOUT / GPS numerik. Tanpa misi aktif -> {active:false}.
+  M.getHUD = function () {
+    if (!M.active) return { active: false };
+    var def = findDef(M.active.id);
+    return {
+      active: true,
+      id: M.active.id,
+      name: M.active.name.toUpperCase(),
+      stage: M.active.stage,
+      stages: M.active.stages,
+      objective: M.active.objective,
+      timer: M.active.timer,
+      timerText: fmtTime(M.active.timer),
+      payout: def ? def.payout : 0,
+      gps: M.getGPS()
+    };
+  };
+
 })();

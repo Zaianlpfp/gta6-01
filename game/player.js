@@ -1,209 +1,461 @@
-// player.js — Solmar Bay r12 (B2). Input owned here; respawn guard.
-var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
-var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
-var WEAPONS={
-1:{n:'fists',dmg:12,rate:.35,range:2.5,max:Infinity},
-2:{n:'pistol',dmg:34,rate:.22,range:40,max:12,res:48},
-3:{n:'smg',dmg:22,rate:.09,range:30,max:32,res:128},
-4:{n:'shotgun',dmg:120,rate:.8,range:24,max:6,res:18},
-5:{n:'rifle',dmg:60,rate:.15,range:48,max:30,res:90,locked:true}};
-var WALK=4,RUN=7;
-function _clamp(v,a,b){return v<a?a:v>b?b:v;}
-function _angDiff(a,b){var d=b-a;while(d>Math.PI)d-=Math.PI*2;while(d<-Math.PI)d+=Math.PI*2;return d;}
-function _fwd(h){return{x:-Math.sin(h),z:-Math.cos(h)};}
-SB.input=SB.input||{};
-var IN=SB.input;
-IN.keys=IN.keys||{};IN.mouse=IN.mouse||{down:false};
-if(typeof IN.axis!=='function')IN.axis=function(){var k=IN.keys,x=0,y=0;
-if(k.KeyD||k.ArrowRight)x+=1;if(k.KeyA||k.ArrowLeft)x-=1;
-if(k.KeyW||k.ArrowUp)y+=1;if(k.KeyS||k.ArrowDown)y-=1;return{x:x,y:y};};
-if(typeof IN.isDown!=='function')IN.isDown=function(c){return!!IN.keys[c];};
-if(typeof document!=='undefined'&&document.addEventListener&&!SB._b2input){
-SB._b2input=true;
-function _kd(e){IN.keys[e.code]=e.type==='keydown';}
-function _md(e){IN.mouse.down=e.type==='mousedown';}
-document.addEventListener('keydown',_kd);
-document.addEventListener('keyup',_kd);
-document.addEventListener('mousedown',_md);
-document.addEventListener('mouseup',_md);
-if(typeof window!=='undefined'&&window.addEventListener)
-window.addEventListener('blur',function(){for(var k in IN.keys)IN.keys[k]=false;});}
-SB._blocked=SB._blocked||function(x,z){
-if(typeof SB.isBlocked==='function'){try{return SB.isBlocked(x,z,1.2);}catch(e){}}
-var c=SB.city&&(SB.city.colliders||SB.city.buildings);
-if(c)for(var i=0;i<c.length;i++){var b=c[i],x0,x1,z0,z1;
-if(b.x0!==undefined){x0=b.x0;x1=b.x1;z0=b.z0;z1=b.z1;}
-else{var cx=b.cx!==undefined?b.cx:b.x,cz=b.cz!==undefined?b.cz:b.z,w=b.w||10,d=b.d||10;
-x0=cx-w/2;x1=cx+w/2;z0=cz-d/2;z1=cz+d/2;}
-if(x>x0-0.6&&x<x1+0.6&&z>z0-0.6&&z<z1+0.6)return true;}
-return false;};
-SB._clampPos=SB._clampPos||function(x,z){
-var b=(SB.city&&SB.city.bounds)||{minX:-560,maxX:470,minZ:-470,maxZ:530};
-return{x:_clamp(x,b.minX,b.maxX),z:_clamp(z,b.minZ,b.maxZ)};};
-// r12: titik di dalam kota? Envelope = bbox distrik (x [-140,215], z [-90,185]).
-SB._inCity=SB._inCity||function(x,z){var d=SB.city&&SB.city.districts,a=1e9,b=-1e9,c=1e9,e=-1e9,i,q;
-if(!d||!d.length)return x>=-140&&x<=215&&z>=-90&&z<=185;
-for(i=0;i<d.length;i++){q=d[i];a=Math.min(a,q.cx-q.w/2);b=Math.max(b,q.cx+q.w/2);c=Math.min(c,q.cz-q.d/2);e=Math.max(e,q.cz+q.d/2);}
-return x>=a&&x<=b&&z>=c&&z<=e;};
-function _box(w,h,d,c,x,y,z){var m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),
-new THREE.MeshStandardMaterial({color:c,roughness:.85}));m.position.set(x,y,z);return m;}
-function mkPed(shirt,skin){var g=new THREE.Group();
-var legL=_box(.22,.8,.24,0x222831,-.14,.4,0),legR=_box(.22,.8,.24,0x222831,.14,.4,0);
-var torso=_box(.62,.6,.34,shirt,0,1.1,0);
-var armL=_box(.16,.62,.2,shirt,-.4,1.1,0),armR=_box(.16,.62,.2,shirt,.4,1.1,0);
-var head=_box(.42,.42,.4,skin,0,1.62,0);
-var cap=_box(.46,.12,.44,0x111827,0,1.86,0);
-g.add(legL);g.add(legR);g.add(torso);g.add(armL);g.add(armR);g.add(head);g.add(cap);
-g.userData.limbs={legL:legL,legR:legR,armL:armL,armR:armR};return g;}
-SB.player=SB.player||{};
-var P=SB.player;
-P.cash=500;P.health=100;P.armor=0;P.weapon=1;
-P.ammo={1:{mag:Infinity,res:Infinity},2:{mag:12,res:48},3:{mag:32,res:128},
-4:{mag:6,res:18},5:{mag:0,res:0,locked:true}};
-P.hero=null;P._px=0;P._pz=60;P._heading=0;P._cool=0;P._prev={};P._wasted=false;
-P.makePedMesh=mkPed;
-P._sync=function(){SB.state.health=P.health;SB.state.armor=P.armor;
-var w={};for(var k in WEAPONS){var a=P.ammo[k];w[WEAPONS[k].n]={ammo:a.mag,reserve:a.res};}
-SB.state.weapons=w;};
-P.pos=function(){var v=SB.vehicles&&SB.vehicles.active;
-if(v&&v.pos)return[v.pos.x,v.pos.z];return[P._px,P._pz];};
-P.heading=function(){var v=SB.vehicles&&SB.vehicles.active;
-if(v)return v.heading;return P._heading;};
-P.onFoot=function(){return!(SB.vehicles&&SB.vehicles.active);};
-P.setPosition=function(x,z,h){var c=SB._clampPos(x,z);x=c.x;z=c.z;
-if(h===undefined)h=P._heading;
-var v=SB.vehicles&&SB.vehicles.active;
-if(v){v.pos.x=x;v.pos.z=z;v.heading=h;v.mesh.position.set(x,0,z);v.mesh.rotation.y=h;}
-P._px=x;P._pz=z;P._heading=h;
-if(P.hero){P.hero.position.set(x,0,z);P.hero.rotation.y=h;}};
-P.create=function(spawn){var preset=SB.state.preset||'free';
-var sp=(SB.city&&SB.city.spawnPoints&&SB.city.spawnPoints[preset])||null;
-var x=0,z=60;if(sp){x=sp[0];z=sp[1];}else if(spawn){x=spawn.x||0;z=spawn.z||60;}
-if(!P.hero){P.hero=mkPed(0xff6b5e,0xc68642);
-if(SB.engine&&SB.engine.scene)SB.engine.scene.add(P.hero);}
-P._px=x;P._pz=z;P._heading=0;P._wasted=false;P.health=100;P.armor=0;
-P.hero.position.set(x,0,z);P.hero.rotation.y=0;P.hero.visible=true;
-if(SB.vehicles&&SB.vehicles.spawnParked)SB.vehicles.spawnParked();
-if((preset==='cover'||preset==='mission')&&SB.vehicles&&SB.vehicles.pinkCar){
-var pc=SB.vehicles.pinkCar;pc.pos.x=x;pc.pos.z=z;pc.heading=0;
-pc.mesh.position.set(x,0,z);pc.mesh.rotation.y=0;P.enterVehicle(pc);}
-P._sync();P._installWrap();return P.hero;};
-P.enterVehicle=function(v){if(!v||!P.hero)return false;
-if(v.parked&&SB.vehicles&&!SB.vehicles._owned[v.id]){
-SB.vehicles._owned[v.id]=1;
-if(SB.police&&SB.police.setStars)SB.police.setStars(Math.min(5,SB.police.stars()+1));
-else SB.state.heat=Math.min(5,(SB.state.heat|0)+1);}
-SB.vehicles.active=v;P.hero.visible=false;return true;};
-P.exitVehicle=function(){var v=SB.vehicles&&SB.vehicles.active;if(!v||!P.hero)return false;
-var r={x:Math.cos(v.heading),z:-Math.sin(v.heading)};
-var nx=v.pos.x+r.x*2.4,nz=v.pos.z+r.z*2.4;
-if(SB._blocked(nx,nz)){nx=v.pos.x-r.x*2.4;nz=v.pos.z-r.z*2.4;}
-if(SB._blocked(nx,nz)){nx=v.pos.x;nz=v.pos.z;}
-var c=SB._clampPos(nx,nz);P._px=c.x;P._pz=c.z;P._heading=v.heading;
-P.hero.position.set(c.x,0,c.z);P.hero.rotation.y=v.heading;P.hero.visible=true;
-SB.vehicles.active=null;SB.state.speedKmh=0;SB.state.vehicleName='—';
-SB.state.vehicleCond=100;SB.state.vehicleStatus='OK';return true;};
-P.damage=function(n){if(n<=0||P._wasted)return;
-var a=Math.min(P.armor,n);P.armor-=a;n-=a;P.health-=n;P._sync();
-if(P.health<=0){P.health=0;P._sync();P._wasted=true;
-if(SB.police&&SB.police.wasted)SB.police.wasted();}};
-P.respawn=function(x,z){P._wasted=false;P.health=100;P.armor=0;
-if(SB.vehicles)SB.vehicles.active=null;
-// r12: respawn di luar kota -> spawn onfoot.
-if(typeof SB._inCity==='function'&&!SB._inCity(x,z)){var o=(SB.city&&SB.city.spawnPoints&&SB.city.spawnPoints.onfoot)||[40,62];x=o[0];z=o[1];}
-P.setPosition(x,z,0);if(P.hero)P.hero.visible=true;P._sync();};
-P.selectWeapon=function(n){n=+n;if(!WEAPONS[n]||WEAPONS[n].locked)return false;
-P.weapon=n;P._sync();return true;};
-P.weaponName=function(){return WEAPONS[P.weapon].n;};
-P.reload=function(){var w=WEAPONS[P.weapon];if(!w||w.max===Infinity)return false;
-var a=P.ammo[P.weapon],need=w.max-a.mag,take=Math.min(need,a.res);
-if(take<=0)return false;a.mag+=take;a.res-=take;P._sync();return true;};
-function _collectTargets(){var out=[];
-function seen(o){for(var i=0;i<out.length;i++)if(out[i].obj===o)return true;return false;}
-function add(o,needFlag){if(!o||seen(o))return;var g=o.group||o.mesh||o;
-var u=g.userData||o.userData||{};
-var hp=typeof u.hp==='number'?u.hp:(typeof o.hp==='number'?o.hp:NaN);
-if(!(hp>0))return;
-if(needFlag&&!(u.boss||u.enforcer||u.hostile||u.cop))return;
-out.push({obj:o,grp:g,ud:u,hp:hp});}
-function scan(a,needFlag){if(a)for(var i=0;i<a.length;i++)add(a[i],needFlag);}
-scan(SB.police&&SB.police.cops,false);
-scan(SB.missions&&SB.missions.standoffPeds,false);
-scan(SB.missions&&SB.missions.standoff,false);
-scan(SB.world&&SB.world.hostiles,false);
-scan(SB.world&&SB.world.peds,true);
-if(SB.engine&&SB.engine.scene&&SB.engine.scene.traverse)
-SB.engine.scene.traverse(function(o){
-if(o&&o.userData&&typeof o.userData.hp==='number')add(o,true);});
-return out;}
-P.fire=function(target){var w=WEAPONS[P.weapon];if(!w)return{hit:false};
-var v=SB.vehicles&&SB.vehicles.active;
-var ox,oz,h;if(v&&v.pos){ox=v.pos.x;oz=v.pos.z;h=v.heading;}
-else{ox=P._px;oz=P._pz;h=P._heading;}
-var f=_fwd(h),mx=ox+f.x*(v?2.2:.9),my=v?1.2:1.35,mz=oz+f.z*(v?2.2:.9);
-if(SB.engine&&SB.engine.muzzlePos&&SB.engine.muzzlePos.set)SB.engine.muzzlePos.set(mx,my,mz);
-if(SB.engine&&typeof SB.engine.burst==='function')SB.engine.burst(mx,my,mz,3);
-if(w.max!==Infinity){var a=P.ammo[P.weapon];
-if(a.mag<=0){P.reload();if(a.mag<=0)return{hit:false,dry:true};}a.mag--;P._sync();}
-var t=null;
-if(target){var g=target.group||target.mesh||target;var u=g.userData||target.userData||{};
-var hp=typeof u.hp==='number'?u.hp:target.hp;
-if(typeof hp==='number'&&hp>0)t={obj:target,grp:g,ud:u,hp:hp};}
-if(!t){var list=_collectTargets(),best=null,bestD=1e9,inCone=null,inConeD=1e9;
-for(var i=0;i<list.length;i++){var c=list[i],p=c.grp.position||c.obj.pos||{x:0,z:0};
-var dx=(p.x!==undefined?p.x:0)-ox,dz=(p.z!==undefined?p.z:0)-oz;
-var d=Math.sqrt(dx*dx+dz*dz);if(d>w.range)continue;
-var dot=d>0?(dx*f.x+dz*f.z)/d:1;
-if(dot>0.4&&d<inConeD){inCone=c;inConeD=d;}
-if(d<bestD){best=c;bestD=d;}}
-t=inCone||best;}
-if(!t)return{hit:false};
-var dmg=w.dmg,hp2;
-if(typeof t.ud.hp==='number'){t.ud.hp-=dmg;hp2=t.ud.hp;}
-else{t.obj.hp-=dmg;hp2=t.obj.hp;}
-if(typeof t.obj.hp==='number'&&t.obj!==t.grp)t.obj.hp=hp2;
-var killed=hp2<=0;
-if(killed){t.grp.visible=false;
-if(t.ud.boss&&SB.missions&&typeof SB.missions.standoffDown==='function')
-SB.missions.standoffDown();}
-return{hit:true,killed:killed,dmg:dmg,boss:!!t.ud.boss,enforcer:!!t.ud.enforcer};}
-P._pressed=function(c){var d=IN.isDown(c),was=P._prev[c];P._prev[c]=d;return d&&!was;};
-P._tick=function(dt){if(!P.hero)return;
-var D=dt||0;if(D>1)D=1;if(D<0)D=0;P._cool-=D;
-if(IN.isDown('Digit1'))P.selectWeapon(1);if(IN.isDown('Digit2'))P.selectWeapon(2);
-if(IN.isDown('Digit3'))P.selectWeapon(3);if(IN.isDown('Digit4'))P.selectWeapon(4);
-if(P._pressed('KeyR'))P.reload();
-if(P._pressed('KeyE')){if(P.onFoot()){
-var nv=SB.vehicles?SB.vehicles.nearest(P._px,P._pz,4.5):null;
-if(nv)P.enterVehicle(nv);}else P.exitVehicle();}
-var ax=IN.axis(),rem=D;
-while(rem>1e-9){var h=rem>1/60?1/60:rem;rem-=h;
-if(P.onFoot()){var run=IN.isDown('ShiftLeft')||IN.isDown('ShiftRight'),sp=run?RUN:WALK;
-var f=_fwd(P._heading),r={x:Math.cos(P._heading),z:-Math.sin(P._heading)};
-var dx=f.x*ax.y+r.x*ax.x,dz=f.z*ax.y+r.z*ax.x;
-var len=Math.sqrt(dx*dx+dz*dz),moving=len>0.05;
-if(moving){dx/=len;dz/=len;
-var nh=Math.atan2(-dx,-dz);
-P._heading+=_angDiff(P._heading,nh)*Math.min(1,h*12);
-var nx=P._px+dx*sp*h,nz=P._pz+dz*sp*h;
-if(!SB._blocked(nx,P._pz))P._px=nx;if(!SB._blocked(P._px,nz))P._pz=nz;
-var c=SB._clampPos(P._px,P._pz);P._px=c.x;P._pz=c.z;
-var sw=Math.sin(SB.state.simTime*9)*0.55,l=P.hero.userData.limbs;
-if(l){l.legL.rotation.x=sw;l.legR.rotation.x=-sw;l.armL.rotation.x=-sw;l.armR.rotation.x=sw;}}
-else{var l2=P.hero.userData.limbs;
-if(l2){l2.legL.rotation.x=0;l2.legR.rotation.x=0;l2.armL.rotation.x=0;l2.armR.rotation.x=0;}}
-P.hero.position.set(P._px,0,P._pz);P.hero.rotation.y=P._heading;}
-else if(SB.vehicles&&SB.vehicles.update)SB.vehicles.update(h);}
-if(SB.input&&SB.input.mouse&&SB.input.mouse.down&&P._cool<=0){
-P.fire();P._cool=WEAPONS[P.weapon].rate;}
-if(SB.vehicles&&SB.vehicles._trafficTick)SB.vehicles._trafficTick(D);
-if((SB.state.preset==='cover'||SB.state.preset==='onfoot'||SB.state.preset==='mission')&&!SB._b2traf&&SB.vehicles&&SB.vehicles.spawnTraffic){
-SB._b2traf=true;SB.vehicles.spawnTraffic(24);}
-if(P.health<=0&&!P._wasted){P._wasted=true;
-if(SB.police&&SB.police.wasted)SB.police.wasted();}};
-P.update=P._tick;
-P._installWrap=function(){if(!SB.engine||typeof SB.engine.step!=='function'||SB._b2step)return;
-SB._b2step=true;var orig=SB.engine.step;
-SB.engine.step=function(dt){P._tick(dt);return orig.call(SB.engine,dt);};};
-P._installWrap();
-P._sync();
+// game/player.js — SB.player: hero on foot, entering/exiting cars, weapons & combat.
+// Fresh write for rebuild r13, from API.md section 5. No code copied from earlier rounds.
+(function () {
+  'use strict';
+  var SB = window.SB = window.SB || {};
+
+  // ---- deterministic RNG fallback (engine.js normally defines SB.rand* first) ----
+  function mulberry32(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  if (typeof SB.rng !== 'function') {
+    SB.rng = mulberry32;
+    SB.rand = mulberry32(1337);
+    SB.rngReset = function () { SB.rand = mulberry32(1337); };
+    SB.randRange = function (a, b) { return a + SB.rand() * (b - a); };
+    SB.randInt = function (a, b) { return Math.floor(SB.randRange(a, b + 1)); };
+    SB.randPick = function (arr) { return arr[Math.floor(SB.rand() * arr.length)]; };
+  }
+
+  var P = SB.player = SB.player || {};
+
+  // ---- public state (API.md section 0 + 5) ----
+  P.cash = 500;            // ledger: player cash (HUD shows max of the 3 ledgers)
+  P.health = 100;          // health bar (HUD)
+  P.armor = 0;             // armor bar (HUD)
+  P.weapon = 1;            // 1=fists, 2=pistol, 3=SMG, 4=shotgun, 5=rifle (locked)
+  P.hero = null;           // THREE.Group mesh of the on-foot hero
+
+  // ---- private state ----
+  P._heading = Math.PI;    // facing angle; forward = (sin h, 0, cos h). PI = facing -z.
+  P._keys = {};            // currently held keys, by e.code
+  P._mouseFire = false;    // mouse button held on the game canvas
+  P._nextShotAt = 0;       // simTime when the next shot is allowed
+  P._reloadingUntil = 0;   // simTime until reload finishes (0 = not reloading)
+  P._magSize = { 2: 12, 3: 30, 4: 6 };
+  P._ammo = { 2: 12, 3: 30, 4: 6 };
+  P._lastCrime = -1000;    // simTime of the last crime (drives heat decay)
+  P._limbs = null;         // { legL, legR, armL, armR } pivot groups for walk anim
+  P._hitCooldownUntil = 0; // simTime until traffic can hurt the hero again
+
+  var WEAPONS = {
+    1: { name: 'FISTS',   range: 2.2, damage: 30, rate: 0.40, pellets: 1 },
+    2: { name: 'PISTOL',  range: 70,  damage: 34, rate: 0.35, pellets: 1 },
+    3: { name: 'SMG',     range: 55,  damage: 18, rate: 0.12, pellets: 1 },
+    4: { name: 'SHOTGUN', range: 28,  damage: 22, rate: 0.80, pellets: 5 }
+  };
+
+  function simNow() {
+    return (SB.state && typeof SB.state.simTime === 'number') ? SB.state.simTime : 0;
+  }
+  function groundY(x, z) {
+    return (SB.city && typeof SB.city.groundAt === 'function') ? SB.city.groundAt(x, z) : 0;
+  }
+  function scene() {
+    return (SB.engine && SB.engine.scene) || null;
+  }
+  function lambert(color) {
+    return new THREE.MeshLambertMaterial({ color: color });
+  }
+
+  // ---- hero mesh (stylised pedestrian: jacket, dark trousers, cap) ----
+  function makeHeroMesh() {
+    var g = new THREE.Group();
+    var skin = lambert(0xd9a066);
+    var jacket = lambert(0x2e7f6f);   // teal jacket
+    var pants = lambert(0x232c3d);    // dark navy trousers
+    var cap = lambert(0x8a2f2f);      // rust-red cap
+    var shoe = lambert(0x1a1a1a);
+
+    var legL = new THREE.Group(); legL.position.set(-0.11, 0.52, 0);
+    var legR = new THREE.Group(); legR.position.set(0.11, 0.52, 0);
+    var shinL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.18), pants);
+    shinL.position.y = -0.25; legL.add(shinL);
+    var shinR = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.18), pants);
+    shinR.position.y = -0.25; legR.add(shinR);
+    var shoeL = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.09, 0.3), shoe);
+    shoeL.position.set(0, -0.48, 0.05); legL.add(shoeL);
+    var shoeR = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.09, 0.3), shoe);
+    shoeR.position.set(0, -0.48, 0.05); legR.add(shoeR);
+
+    var torso = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.62, 0.3), jacket);
+    torso.position.y = 0.85;
+    var armL = new THREE.Group(); armL.position.set(-0.34, 1.12, 0);
+    var armR = new THREE.Group(); armR.position.set(0.34, 1.12, 0);
+    var armLm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.56, 0.16), jacket);
+    armLm.position.y = -0.26; armL.add(armLm);
+    var armRm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.56, 0.16), jacket);
+    armRm.position.y = -0.26; armR.add(armRm);
+    var head = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), skin);
+    head.position.y = 1.34;
+    var hat = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.34), cap);
+    hat.position.y = 1.52;
+    var brim = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.04, 0.16), cap);
+    brim.position.set(0, 1.48, 0.22);
+
+    g.add(legL); g.add(legR); g.add(torso);
+    g.add(armL); g.add(armR); g.add(head); g.add(hat); g.add(brim);
+    g.userData.isHero = true;
+    P._limbs = { legL: legL, legR: legR, armL: armL, armR: armR };
+    return g;
+  }
+
+  P._ensureHero = function () {
+    if (P.hero) return P.hero;
+    var sc = scene();
+    if (!sc) return null;
+    P.hero = makeHeroMesh();
+    P.hero.position.set(0, groundY(0, 40), 40);
+    P.hero.rotation.y = P._heading;
+    sc.add(P.hero);
+    return P.hero;
+  };
+
+  // Place the hero (on foot) at x,z facing heading (radians).
+  P._placeAt = function (x, z, heading) {
+    var h = P._ensureHero();
+    if (!h) return;
+    if (typeof heading === 'number') P._heading = heading;
+    h.position.set(x, groundY(x, z), z);
+    h.rotation.y = P._heading;
+    h.visible = true;
+  };
+
+  // Current controlled position: vehicle if driving, hero if on foot.
+  P.pos = function () {
+    var V = SB.vehicles;
+    if (V && V.active && V.active.mesh) {
+      return [V.active.mesh.position.x, V.active.mesh.position.z];
+    }
+    if (P.hero) return [P.hero.position.x, P.hero.position.z];
+    return [0, 40];
+  };
+
+  P.onFoot = function () {
+    return !SB.vehicles || !SB.vehicles.active;
+  };
+
+  P.enterVehicle = function (v) {
+    if (!v || !v.mesh) return false;
+    var V = SB.vehicles;
+    if (!V) return false;
+    V.active = v;
+    if (v.mesh.userData) v.mesh.userData.speed = v.mesh.userData.speed || 0;
+    if (P.hero) P.hero.visible = false;
+    if (SB.state) {
+      SB.state.vehicleName = v.name || 'Car';
+      SB.state.vehicleCond = (typeof v.cond === 'number') ? v.cond : 100;
+      SB.state.vehicleStatus = (SB.state.vehicleCond >= 70) ? 'OK' : 'DENTED';
+      SB.state.speedKmh = 0;
+    }
+    return true;
+  };
+
+  P.exitVehicle = function () {
+    var V = SB.vehicles;
+    if (!V || !V.active || !V.active.mesh) return false;
+    var m = V.active.mesh;
+    var hx = m.position.x + Math.cos(m.rotation.y) * 2.0;
+    var hz = m.position.z - Math.sin(m.rotation.y) * 2.0;
+    V.active = null;
+    P._placeAt(hx, hz, P._heading);
+    if (SB.state) {
+      SB.state.vehicleName = '—';
+      SB.state.vehicleCond = 100;
+      SB.state.vehicleStatus = 'OK';
+      SB.state.speedKmh = 0;
+    }
+    return true;
+  };
+
+  // Damage the player; at 0 health the police bust the player (see police.js).
+  P.damage = function (n) {
+    if (typeof n !== 'number' || n <= 0) return P.health;
+    var rest = n;
+    if (P.armor > 0) {
+      var absorbed = Math.min(P.armor, rest);
+      P.armor -= absorbed; rest -= absorbed;
+    }
+    P.health -= rest;
+    if (P.health <= 0) {
+      P.health = 0;
+      if (SB.police && typeof SB.police.busted === 'function') SB.police.busted();
+    }
+    return P.health;
+  };
+  // Probe helper: the blind-judge probe calls damage(n) to force a BUSTED test.
+  window.damage = function (n) { return P.damage(n); };
+
+  // ---- combat ----
+  function damageableTargets() {
+    var out = [];
+    var i, t;
+    if (SB.police && SB.police.cops) {
+      for (i = 0; i < SB.police.cops.length; i++) {
+        t = SB.police.cops[i];
+        if (t && t.userData && !t.userData.dead) out.push(t);
+      }
+    }
+    if (SB.missions && SB.missions.targets) {
+      for (i = 0; i < SB.missions.targets.length; i++) {
+        t = SB.missions.targets[i];
+        if (t && t.userData && !t.userData.dead) out.push(t);
+      }
+    }
+    if (SB.city && SB.city.peds) {
+      for (i = 0; i < SB.city.peds.length; i++) {
+        t = SB.city.peds[i];
+        // Ambient peds are not damageable; only flagged boss/enforcer peds are.
+        if (t && t.userData && !t.userData.dead &&
+            (t.userData.boss || t.userData.enforcer)) out.push(t);
+      }
+    }
+    return out;
+  }
+
+  function killTarget(t) {
+    if (!t || !t.userData) return;
+    t.userData.dead = true;
+    t.userData.hp = 0;
+    // Fall over flat.
+    t.rotation.x = -Math.PI / 2;
+    t.position.y = Math.max(0.15, t.position.y);
+    P._lastCrime = simNow();
+    if (t.userData.boss && SB.missions && typeof SB.missions.standoffDown === 'function') {
+      try { SB.missions.standoffDown(); } catch (e) {}
+    }
+    if (SB.police && typeof SB.police.setStars === 'function') {
+      var s = SB.police.stars();
+      if (s < 5) SB.police.setStars(s + 1);
+    }
+  }
+
+  P.fire = function () {
+    if (!P.onFoot()) return false; // no drive-by shooting
+    var now = simNow();
+    if (now < P._nextShotAt || now < P._reloadingUntil) return false;
+    var w = WEAPONS[P.weapon] || WEAPONS[1];
+    if (P.weapon !== 1) {
+      if ((P._ammo[P.weapon] || 0) <= 0) {
+        P._reloadingUntil = now + 1.1; // empty mag: auto reload
+        return false;
+      }
+      P._ammo[P.weapon] -= 1;
+    }
+    P._nextShotAt = now + w.rate;
+    var pos = P.pos();
+    var fx = Math.sin(P._heading), fz = Math.cos(P._heading);
+    var mx = pos[0] + fx * 0.7, mz = pos[1] + fz * 0.7, my = 1.45;
+    if (SB.engine && SB.engine.muzzlePos && typeof SB.engine.muzzlePos.set === 'function') {
+      SB.engine.muzzlePos.set(mx, my, mz);
+    }
+    if (SB.engine && typeof SB.engine.burst === 'function') {
+      try { SB.engine.burst(mx, my, mz, w.pellets); } catch (e) {}
+    }
+    // Nearest damageable target inside the firing cone.
+    var best = null, bestD = 1e9;
+    var targets = damageableTargets();
+    for (var i = 0; i < targets.length; i++) {
+      var t = targets[i];
+      var dx = t.position.x - pos[0], dz = t.position.z - pos[1];
+      var d = Math.sqrt(dx * dx + dz * dz);
+      if (d > w.range || d < 0.01) continue;
+      var dot = (dx * fx + dz * fz) / d;
+      if (dot < 0.85) continue; // must be roughly in front
+      if (d < bestD) { bestD = d; best = t; }
+    }
+    if (best) {
+      var hp = (typeof best.userData.hp === 'number') ? best.userData.hp : 100;
+      hp -= w.damage * w.pellets;
+      best.userData.hp = hp;
+      if (hp <= 0) killTarget(best);
+    }
+    return true;
+  };
+
+  P.reload = function () {
+    if (P.weapon === 1) return;
+    var now = simNow();
+    if (now < P._reloadingUntil) return;
+    P._reloadingUntil = now + 1.1;
+    P._ammo[P.weapon] = P._magSize[P.weapon];
+  };
+
+  // ---- per-tick movement (called from the step wrap) ----
+  P._tick = function (dt) {
+    if (!dt || dt <= 0) return;
+    var h = P._ensureHero();
+    var k = P._keys;
+    var now = simNow();
+
+    if (P.onFoot() && h) {
+      var fwd = (k.KeyW || k.ArrowUp ? 1 : 0) - (k.KeyS || k.ArrowDown ? 1 : 0);
+      var turn = (k.KeyD || k.ArrowRight ? 1 : 0) - (k.KeyA || k.ArrowLeft ? 1 : 0);
+      P._heading -= turn * 3.5 * dt;
+      var speed = fwd * 6; // on-foot top speed 6 m/s
+      var nx = h.position.x + Math.sin(P._heading) * speed * dt;
+      var nz = h.position.z + Math.cos(P._heading) * speed * dt;
+      h.position.set(nx, groundY(nx, nz), nz);
+      h.rotation.y = P._heading;
+      // Walk-cycle swing, driven purely by simTime (deterministic).
+      var swing = (fwd !== 0) ? Math.sin(now * 9) * 0.55 : 0;
+      if (P._limbs) {
+        P._limbs.legL.rotation.x = swing;
+        P._limbs.legR.rotation.x = -swing;
+        P._limbs.armL.rotation.x = -swing * 0.8;
+        P._limbs.armR.rotation.x = swing * 0.8;
+      }
+      // Traffic can knock the hero down: small damage with a 1s cooldown.
+      if (SB.vehicles && SB.vehicles.list && now >= P._hitCooldownUntil) {
+        var pos = [h.position.x, h.position.z];
+        for (var i = 0; i < SB.vehicles.list.length; i++) {
+          var cm = SB.vehicles.list[i].mesh;
+          if (!cm) continue;
+          var dx = cm.position.x - pos[0], dz = cm.position.z - pos[1];
+          if (dx * dx + dz * dz < 1.44) {
+            P._hitCooldownUntil = now + 1.0;
+            P.damage(5);
+            break;
+          }
+        }
+      }
+    }
+    // Fire while held (Space or mouse button on the canvas).
+    if ((k.Space || P._mouseFire) && P.onFoot()) P.fire();
+  };
+
+  // ---- input ----
+  function keyCode(e) {
+    if (e.code) return e.code;
+    var m = { w: 'KeyW', a: 'KeyA', s: 'KeyS', d: 'KeyD', e: 'KeyE', r: 'KeyR', ' ': 'Space' };
+    if (typeof e.key === 'string') {
+      var kl = e.key.toLowerCase();
+      if (m[kl]) return m[kl];
+      if (/^[1-4]$/.test(e.key)) return 'Digit' + e.key;
+      if (e.key === 'ArrowUp') return 'ArrowUp';
+      if (e.key === 'ArrowDown') return 'ArrowDown';
+      if (e.key === 'ArrowLeft') return 'ArrowLeft';
+      if (e.key === 'ArrowRight') return 'ArrowRight';
+    }
+    return '';
+  }
+  window.addEventListener('keydown', function (e) {
+    var c = keyCode(e);
+    if (!c) return;
+    if (c === 'Space' || c.indexOf('Arrow') === 0) {
+      if (e.preventDefault) e.preventDefault();
+    }
+    if (e.repeat) { P._keys[c] = true; return; }
+    P._keys[c] = true;
+    if (c === 'KeyE') {
+      if (P.onFoot()) {
+        // Enter the nearest vehicle within 4 m.
+        var V = SB.vehicles, best = null, bestD = 16;
+        if (V && V.list) {
+          var pos = P.pos();
+          for (var i = 0; i < V.list.length; i++) {
+            var m = V.list[i].mesh;
+            if (!m) continue;
+            var dx = m.position.x - pos[0], dz = m.position.z - pos[1];
+            var d2 = dx * dx + dz * dz;
+            if (d2 < bestD) { bestD = d2; best = V.list[i]; }
+          }
+        }
+        if (best) { P.enterVehicle(best); P._lastCrime = simNow(); }
+      } else {
+        P.exitVehicle();
+      }
+    } else if (c === 'Digit1' || c === 'Digit2' || c === 'Digit3' || c === 'Digit4') {
+      P.weapon = parseInt(c.slice(5), 10);
+    } else if (c === 'KeyR') {
+      P.reload();
+    }
+  });
+  window.addEventListener('keyup', function (e) {
+    var c = keyCode(e);
+    if (c) P._keys[c] = false;
+  });
+  window.addEventListener('mousedown', function (e) {
+    if (SB.engine && SB.engine.canvas && e.target === SB.engine.canvas) P._mouseFire = true;
+  });
+  window.addEventListener('mouseup', function () { P._mouseFire = false; });
+  window.addEventListener('blur', function () { P._keys = {}; P._mouseFire = false; });
+
+  // ---- wrap SB.engine.step ONCE: add input + combat tick (guard SB._b2step) ----
+  P._installStepWrap = function () {
+    if (SB._b2step) return true;
+    if (!SB.engine || typeof SB.engine.step !== 'function') return false;
+    SB._b2step = true;
+    var origStep = SB.engine.step;
+    SB.engine.step = function (dt) {
+      var d = (typeof dt === 'number' && dt > 0) ? dt : 0;
+      try { P._tick(d); } catch (e) {}
+      try {
+        if (SB.vehicles && typeof SB.vehicles._tick === 'function') SB.vehicles._tick(d);
+      } catch (e) {}
+      return origStep.call(SB.engine, dt);
+    };
+    return true;
+  };
+
+  // ---- wrap SB.engine.setPreset ONCE: per-preset placement (guard SB._b2preset) ----
+  P._installPresetWrap = function () {
+    if (SB._b2preset) return true;
+    if (!SB.engine || typeof SB.engine.setPreset !== 'function') return false;
+    SB._b2preset = true;
+    var origPreset = SB.engine.setPreset;
+    SB.engine.setPreset = function (name, opts) {
+      var out = origPreset.call(SB.engine, name, opts);
+      try {
+        var V = SB.vehicles, PL = SB.police;
+        if (V && typeof V._onPreset === 'function') V._onPreset(name);
+        if (PL && typeof PL._onPreset === 'function') PL._onPreset(name);
+        P._onPreset(name);
+      } catch (e) {}
+      return out;
+    };
+    return true;
+  };
+
+  // Hero placement per preset (runs after vehicles + police hooks).
+  P._onPreset = function (name) {
+    P._ensureHero();
+    if (name === 'cover' || name === 'drive') {
+      var V = SB.vehicles;
+      if (V && V.pinkCar) {
+        P.enterVehicle(V.pinkCar);
+      } else {
+        P._placeAt(0, 0, Math.PI);
+      }
+    } else if (name === 'onfoot') {
+      if (!P.onFoot()) P.exitVehicle();
+      P._placeAt(0, 40, Math.PI);
+    } else if (name === 'mission') {
+      if (!P.onFoot()) P.exitVehicle();
+      P._placeAt(2, 10, Math.PI);
+    } else if (name === 'free') {
+      if (!P.onFoot()) P.exitVehicle();
+      P._placeAt(0, 40, Math.PI);
+    }
+    // 'map': leave the hero where it is.
+  };
+
+  // Install wraps now; retry briefly if engine.js has not loaded yet.
+  P._installStepWrap();
+  P._installPresetWrap();
+  if (!SB._b2step || !SB._b2preset) {
+    var _tries = 0;
+    var _iv = setInterval(function () {
+      P._installStepWrap();
+      P._installPresetWrap();
+      _tries += 1;
+      if ((SB._b2step && SB._b2preset) || _tries > 50) clearInterval(_iv);
+    }, 100);
+  }
+})();

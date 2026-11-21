@@ -1,219 +1,430 @@
-// police.js — Solmar Bay r12 (B2). Heat 0-5; respawn in-city.
-// Heli hovers (10,-2); cone 0.10 incl. fallback (r10: 0.25 -> 0.10). Pursuit substeps wall dt.
-var SB=(typeof window!=='undefined'&&window.SB)?window.SB:globalThis.SB;
-var THREE=(typeof window!=='undefined'&&window.THREE)?window.THREE:globalThis.THREE;
-var UNITS=['MARLIN-11','SNAPPER-25','TARPON-18','IBIS-43','HERON-17','KESTREL-31'];
-function _clamp(v,a,b){return v<a?a:v>b?b:v;}
-function _rot(lx,lz,h){return{x:lx*Math.cos(h)+lz*Math.sin(h),z:-lx*Math.sin(h)+lz*Math.cos(h)};}
-function _box(w,h,d,c,x,y,z){var m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),
-new THREE.MeshStandardMaterial({color:c,roughness:.8}));m.position.set(x,y,z);return m;}
-function _heroPos(){if(SB.engine&&typeof SB.engine.heroPos==='function'){
-var p=SB.engine.heroPos();if(p)return p;}
-if(SB.player&&typeof SB.player.pos==='function')return SB.player.pos();return[0,0];}
-function _heroHeading(){if(SB.player&&typeof SB.player.heading==='function')return SB.player.heading();
-return 0;}
-function mkCruiser(){var g=SB.vehicles.makeCarMesh('sedan',0xf2f2f2);
-g.add(_box(2.04,.16,4,0x111827,0,.85,0));
-g.add(_box(1,.12,.4,0x222222,0,1.6,.15));
-var barR=_box(.45,.14,.42,0xff2222,-.26,1.68,.15);
-var barB=_box(.45,.14,.42,0x2244ff,.26,1.68,.15);
-g.add(barR);g.add(barB);g.userData.barR=barR;g.userData.barB=barB;return g;}
-function mkHeli(){var g=new THREE.Group();
-g.add(_box(2.6,1.5,5.2,0xf5f5f0,0,0,0));
-g.add(_box(2.2,.9,1.4,0x0f2a4a,0,.1,-2.2));
-g.add(_box(2.62,.35,5.24,0x1e40af,0,-.2,0));
-g.add(_box(.6,.6,4.6,0xf5f5f0,0,.2,4.4));
-g.add(_box(.12,1.4,1,0x1e40af,0,.7,6.4));
-var mast=new THREE.Mesh(new THREE.CylinderGeometry(.12,.12,.5,8),
-new THREE.MeshStandardMaterial({color:0x333333}));mast.position.set(0,1,0);g.add(mast);
-var rotor=new THREE.Group();rotor.position.set(0,1.3,0);
-rotor.add(_box(.4,.06,8,0x222222,0,0,0));rotor.add(_box(8,.06,.4,0x222222,0,0,0));
-g.add(rotor);
-var tail=new THREE.Group();tail.position.set(.45,.3,6.4);
-tail.add(_box(.08,1.3,.08,0x222222,0,0,0));tail.add(_box(.08,.08,1.3,0x222222,0,0,0));
-g.add(tail);
-g.add(_box(.12,.12,3.6,0x333333,-1,-1.05,0));g.add(_box(.12,.12,3.6,0x333333,1,-1.05,0));
-g.add(_box(.1,.5,.1,0x333333,-1,-.75,.8));g.add(_box(.1,.5,.1,0x333333,1,-.75,.8));
-g.add(_box(.1,.5,.1,0x333333,-1,-.75,-.8));g.add(_box(.1,.5,.1,0x333333,1,-.75,-.8));
-var bc=new THREE.Mesh(new THREE.SphereGeometry(.18,8,8),
-new THREE.MeshBasicMaterial({color:0xff2222}));bc.position.set(0,1,-1.5);g.add(bc);
-var sl=new THREE.Mesh(new THREE.CylinderGeometry(.25,.35,.4,10),
-new THREE.MeshStandardMaterial({color:0xdddddd}));sl.position.set(0,-.9,-1.8);g.add(sl);
-var cone=null;
-if(SB.engine&&typeof SB.engine.spotCone==='function'){try{cone=SB.engine.spotCone();}catch(e){cone=null;}}
-if(!cone){cone=new THREE.Mesh(new THREE.ConeGeometry(6,40,24,1,true),
-new THREE.MeshBasicMaterial({color:0xfff2a0,transparent:true,opacity:.10,
-side:THREE.DoubleSide,depthWrite:false}));}
-else{var pr=cone.geometry&&cone.geometry.parameters;
-if(pr){if(pr.height)cone.scale.y=40/pr.height;if(pr.radius){cone.scale.x=6/pr.radius;cone.scale.z=6/pr.radius;}}}
-cone.position.y=-20;g.add(cone);
-var disc=new THREE.Mesh(new THREE.CircleGeometry(6,24),
-new THREE.MeshBasicMaterial({color:0xfff6b0,transparent:true,opacity:.18,depthWrite:false}));
-disc.rotation.x=-Math.PI/2;disc.position.y=.15;
-if(SB.engine&&SB.engine.scene)SB.engine.scene.add(disc);
-g.userData.rotor=rotor;g.userData.tail=tail;g.userData.disc=disc;
-return g;}
-SB.police=SB.police||{};
-var PL=SB.police;
-PL.response=[];PL.cops=[];PL.heli=null;PL.roadblock=null;
-PL._cruisers=[];PL._updated=false;PL._bustT=0;
-PL.stars=function(){return _clamp(SB.state.heat|0,0,5);};
-PL.setStars=function(n){SB.state.heat=_clamp(n|0,0,5);PL._syncResponse(true);};
-PL.responseList=function(){return PL.response;};
-PL._desired=function(){var preset=SB.state.preset||'free',heat=PL.stars();
-var d={cruisers:0,heli:false,roadblock:false,foot:0};
-if(preset==='cover'){d.cruisers=3;d.heli=true;d.roadblock=true;}
-else if(preset==='mission'){d.cruisers=3;d.heli=true;d.roadblock=heat>=4;}
-else{d.cruisers=heat;d.heli=heat>=5;d.roadblock=heat>=4;d.foot=heat>=3?(heat>=5?2:1):0;}
-return d;};
-PL._names=function(){var d=PL._desired(),n=[];
-if(d.heli)n.push('GULL-1');
-for(var i=0;i<d.cruisers;i++)n.push(UNITS[i]);
-if(d.roadblock){n.push('BLOCK-1');n.push('BLOCK-2');}
-for(var j=0;j<d.foot;j++)n.push('FOOT-'+(j+1));return n;};
-PL._syncResponse=function(force){var names=PL._names(),same=!force&&PL.response.length===names.length;
-if(same)for(var i=0;i<names.length;i++)if(PL.response[i].name!==names[i]){same=false;break;}
-if(!same){PL.response=names.map(function(nm){
-var st=nm==='GULL-1'?'SPOTLIGHT':(nm.indexOf('BLOCK')===0?'ROADBLOCK':'PURSUIT');
-return{name:nm,dist:999,status:st};});return;}
-var hp=_heroPos();
-function dist(px,pz){var dx=px-hp[0],dz=pz-hp[1];return Math.round(Math.sqrt(dx*dx+dz*dz));}
-for(var k=0;k<PL.response.length;k++){var e=PL.response[k];
-if(e.name==='GULL-1'){e.dist=PL.heli?dist(PL.heli.pos.x,PL.heli.pos.z):999;e.status='SPOTLIGHT';}
-else if(e.name.indexOf('BLOCK')===0){var rb=PL.roadblock;
-e.dist=rb?dist(rb.cx,rb.cz):999;e.status='ROADBLOCK';}
-else if(e.name.indexOf('FOOT')===0){var ci=+e.name.slice(5)-1,c=PL.cops[ci];
-e.dist=c?dist(c.pos.x,c.pos.z):999;e.status='PURSUIT';}
-else{var idx=UNITS.indexOf(e.name),u=PL._cruisers[idx];
-if(!u){e.dist=999;e.status='PURSUIT';}
-else{e.dist=u._placed?dist(u.pos.x,u.pos.z):999;e.status=u.status;}}}};
-// boss/enforcer userData flags REQUIRED, else peds can't be killed (r5 bug).
-PL.spawnCop=function(o){o=o||{};
-var x=o.x||0,z=o.z||0;
-var mesh=null;
-if(SB.player&&SB.player.makePedMesh)mesh=SB.player.makePedMesh(o.shirt||0x1e3a5f,o.skin||0x8d5524);
-else{mesh=new THREE.Group();mesh.add(_box(.6,.6,.3,o.shirt||0x1e3a5f,0,1.1,0));
-mesh.add(_box(.4,.4,.4,o.skin||0x8d5524,0,1.6,0));}
-mesh.position.set(x,0,z);mesh.rotation.y=o.heading||0;
-mesh.userData={cop:true,boss:!!o.boss,enforcer:!!o.enforcer,hp:o.hp||100,name:o.name||'COP'};
-if(SB.engine&&SB.engine.scene)SB.engine.scene.add(mesh);
-var e={group:mesh,name:o.name||('FOOT-'+(PL.cops.length+1)),pos:mesh.position,
-speed:0,status:'PURSUIT',hp:o.hp||100,userData:mesh.userData};
-PL.cops.push(e);return e;};
-PL.spawnBoss=PL.spawnCop;
-PL.spawnHeli=function(){if(PL.heli)return PL.heli;
-var g=mkHeli(),hp=_heroPos();
-g.position.set(hp[0]+8,38,hp[1]+10);
-if(SB.engine&&SB.engine.scene)SB.engine.scene.add(g);
-PL.heli={group:g,unit:'GULL-1',pos:g.position,rotor:g.userData.rotor,
-tail:g.userData.tail,disc:g.userData.disc,status:'SPOTLIGHT'};
-return PL.heli;};
-PL.updateHeli=function(dt){if(!PL.heli)return;var hp=_heroPos(),hh=_heroHeading();
-var off=_rot(10,-2,hh),tx=hp[0]+off.x,tz=hp[1]+off.z,ty=38;
-var p=PL.heli.pos,k=Math.min(1,dt*1.5);
-p.x+=(tx-p.x)*k;p.y+=(ty-p.y)*k;p.z+=(tz-p.z)*k;
-PL.heli.group.rotation.y=hh;
-if(PL.heli.rotor)PL.heli.rotor.rotation.y+=dt*14;
-if(PL.heli.tail)PL.heli.tail.rotation.x+=dt*20;
-if(PL.heli.disc)PL.heli.disc.position.set(p.x,.15,p.z);};
-PL._syncRoadblock=function(on,hx,hz,hh){if(!on){
-if(PL.roadblock){if(SB.engine&&SB.engine.scene)SB.engine.scene.remove(PL.roadblock.group);
-PL.roadblock=null;}return;}
-if(!PL.roadblock){var g=new THREE.Group();
-var c1=mkCruiser(),c2=mkCruiser();
-c1.position.set(-4.5,0,0);c2.position.set(4.5,0,0);g.add(c1);g.add(c2);
-g.add(_box(3.4,.9,.3,0xff7a00,-2.3,.45,.6));g.add(_box(3.4,.9,.3,0xff7a00,2.3,.45,.6));
-g.add(_box(3.4,.2,.32,0xffffff,-2.3,.7,.6));g.add(_box(3.4,.2,.32,0xffffff,2.3,.7,.6));
-if(SB.engine&&SB.engine.scene)SB.engine.scene.add(g);
-PL.roadblock={group:g,cx:hx,cz:hz};}
-var f={x:-Math.sin(hh),z:-Math.cos(hh)};
-PL.roadblock.group.position.set(hx+f.x*30,0,hz+f.z*30);
-PL.roadblock.group.rotation.y=hh+Math.PI;
-PL.roadblock.cx=hx+f.x*30;PL.roadblock.cz=hz+f.z*30;};
-// Pursuit in 1/60 substeps; spawn/despawn idempotent, response sync once after.
-PL.update=function(dt){var D=dt||0;if(D>1)D=1;if(D<0)D=0;
-if(!SB.player||!SB.player.hero){PL._syncResponse();return;}
-var rem=D;
-while(rem>1e-9){var h=rem>1/60?1/60:rem;rem-=h;
-var hp=_heroPos(),hh=_heroHeading(),hx=hp[0],hz=hp[1];
-var d=PL._desired(),preset=SB.state.preset||'free';
-var heroSp=(SB.state.speedKmh||0)/3.6;
-while(PL._cruisers.length<d.cruisers){var i=PL._cruisers.length;
-var g=mkCruiser(),off=_rot(i%2?-4:4,10+i*8,hh);
-g.position.set(hx+off.x,0,hz+off.z);g.rotation.y=hh;
-if(SB.engine&&SB.engine.scene)SB.engine.scene.add(g);
-PL._cruisers.push({group:g,unit:UNITS[i],pos:g.position,speed:0,heading:hh,
-status:'PURSUIT',_placed:false,_ramAt:-9});}
-while(PL._cruisers.length>d.cruisers){var rm=PL._cruisers.pop();
-if(SB.engine&&SB.engine.scene)SB.engine.scene.remove(rm.group);}
-var esc=SB.city&&SB.city.staging&&SB.city.staging.coverCruisers?SB.city.staging.coverCruisers:[[-5,4],[5.5,6]];
-for(var ci=0;ci<PL._cruisers.length;ci++){var u=PL._cruisers[ci];
-var ph=Math.floor(SB.state.simTime*3)%2;
-if(u.group.userData.barR)u.group.userData.barR.visible=ph===0;
-if(u.group.userData.barB)u.group.userData.barB.visible=ph===1;
-if(preset==='cover'){var o=ci<2?esc[ci]:[0,-20],rp=_rot(o[0],o[1],hh);
-u.pos.x=hx+rp.x;u.pos.z=hz+rp.z;u.heading=hh;u.speed=heroSp;
-u.group.rotation.y=hh;u.status=ci===2?'RAMMING':'PURSUIT';u._placed=true;continue;}
-var dx=hx-u.pos.x,dz=hz-u.pos.z,dist=Math.sqrt(dx*dx+dz*dz);
-if(dist>160){var bo=_rot(ci%2?-6:6,14+ci*6,hh);
-u.pos.x=hx+bo.x;u.pos.z=hz+bo.z;dx=hx-u.pos.x;dz=hz-u.pos.z;dist=Math.sqrt(dx*dx+dz*dz);}
-var wantH=Math.atan2(-dx,-dz),dh=wantH-u.heading;
-while(dh>Math.PI)dh-=Math.PI*2;while(dh<-Math.PI)dh+=Math.PI*2;
-u.heading+=_clamp(dh,-2.2*h,2.2*h);
-var target=dist<7?26:20+PL.stars()*1.5;
-u.speed+=_clamp(target-u.speed,-12*h,12*h);
-u.pos.x+=-Math.sin(u.heading)*u.speed*h;u.pos.z+=-Math.cos(u.heading)*u.speed*h;
-u.group.rotation.y=u.heading;
-u.status=dist<12?'RAMMING':'PURSUIT';u._placed=true;
-if(dist<3.4&&SB.state.simTime-u._ramAt>1){u._ramAt=SB.state.simTime;
-var onFoot=SB.player.onFoot();
-if(onFoot){if(SB.player.damage)SB.player.damage(8);}
-else if(SB.vehicles&&SB.vehicles.active){var av=SB.vehicles.active;
-av.cond=Math.max(0,av.cond-4);
-if(SB.player.damage&&Math.abs(u.speed-heroSp)>10)SB.player.damage(2);}}}
-if(d.heli){PL.spawnHeli();PL.updateHeli(h);}
-else if(PL.heli){if(SB.engine&&SB.engine.scene){SB.engine.scene.remove(PL.heli.group);
-if(PL.heli.disc)SB.engine.scene.remove(PL.heli.disc);}PL.heli=null;}
-PL._syncRoadblock(d.roadblock,hx,hz,hh);
-var wantFoot=d.foot;
-for(var fi=0;fi<wantFoot;fi++){if(!PL.cops[fi]){var a=1.2+fi*2.4;
-PL.spawnCop({x:hx+Math.cos(a)*14,z:hz+Math.sin(a)*14,hp:100,name:'FOOT-'+(fi+1)});}}
-for(var cj=0;cj<PL.cops.length;cj++){var cp=PL.cops[cj];
-if(!cp.userData||cp.userData.hp<=0)continue;
-var cdx=hx-cp.pos.x,cdz=hz-cp.pos.z,cd=Math.sqrt(cdx*cdx+cdz*cdz);
-if(cd>2.5){cp.pos.x+=cdx/cd*5.5*h;cp.pos.z+=cdz/cd*5.5*h;
-cp.group.rotation.y=Math.atan2(-cdx,-cdz);}
-if(cd<1.8){cp._hitAt=cp._hitAt||-9;
-if(SB.state.simTime-cp._hitAt>1){cp._hitAt=SB.state.simTime;
-if(SB.player.damage)SB.player.damage(5);}}
-if(!cp.userData.boss&&SB.player.onFoot()&&cd<2.2){PL._bustT+=h;
-if(PL._bustT>2.5){PL._bustT=0;PL.busted();}}else PL._bustT=Math.max(0,PL._bustT-h);}
-var near=PL.heli?true:false;
-for(var ni=0;ni<PL._cruisers.length;ni++){var nu=PL._cruisers[ni];
-var ndx=nu.pos.x-hx,ndz=nu.pos.z-hz;
-if(ndx*ndx+ndz*ndz<625){near=true;break;}}
-SB.state.inSight=near;}
-PL._syncResponse();PL._updated=true;};
-// r12: BUSTED respawn harus di dalam kota — hospital lama [-150,250] void
-// (kunci hospital tak ada di city.js); pakai hospital hanya kalau in-city.
-PL._reset=function(){var sp=(SB.city&&SB.city.spawnPoints)||{};
-var hosp=sp.onfoot||[40,62];
-if(sp.hospital&&typeof SB._inCity==='function'&&SB._inCity(sp.hospital[0],sp.hospital[1]))hosp=sp.hospital;
-if(SB.player&&SB.player.respawn)SB.player.respawn(hosp[0],hosp[1]);
-if(SB.player)SB.player.cash=Math.max(0,Math.floor((SB.player.cash||0)*0.9));
-SB.state.cash=Math.max(0,Math.floor((SB.state.cash||0)*0.9));
-PL.setStars(0);
-while(PL._cruisers.length){var rm=PL._cruisers.pop();
-if(SB.engine&&SB.engine.scene)SB.engine.scene.remove(rm.group);}
-if(PL.heli){if(SB.engine&&SB.engine.scene){SB.engine.scene.remove(PL.heli.group);
-if(PL.heli.disc)SB.engine.scene.remove(PL.heli.disc);}PL.heli=null;}
-PL._syncRoadblock(false,0,0,0);
-for(var i=0;i<PL.cops.length;i++)if(SB.engine&&SB.engine.scene)SB.engine.scene.remove(PL.cops[i].group);
-PL.cops=[];PL._bustT=0;};
-PL.busted=function(){PL._reset();};
-PL.wasted=function(){PL._reset();};
-PL._installWrap=function(){if(!SB.engine||typeof SB.engine.step!=='function'||SB._b2polStep)return;
-SB._b2polStep=true;var orig=SB.engine.step;
-SB.engine.step=function(dt){PL.update(dt);return orig.call(SB.engine,dt);};};
-PL._installWrap();
-PL._syncResponse(true);
+// game/police.js — SB.police: wanted stars, pursuit units, helicopter + spotlight, BUSTED.
+// Fresh write for rebuild r13, from API.md section 7. No code copied from earlier rounds.
+(function () {
+  'use strict';
+  var SB = window.SB = window.SB || {};
+
+  // ---- in-city guard (r12 lesson: NEVER respawn to the (-150,250) void) ----
+  // City envelope: x [-140, 215], z [-90, 185].
+  SB._inCity = function (x, z) {
+    return x >= -140 && x <= 215 && z >= -90 && z <= 185;
+  };
+
+  var PL = SB.police = SB.police || {};
+  PL._stars = 0;                 // authoritative wanted level 0-5 (SB.state.heat mirrors it)
+  PL.response = [];              // [{ name, dist, status }] units responding (HUD reads this)
+  PL.heli = null;                // helicopter THREE.Group (AIR-1 / GULL-1)
+  PL._cone = null;               // spotlight cone mesh from SB.engine.spotCone()
+  PL.cops = [];                  // foot cops (THREE.Group meshes with userData.hp/isCop)
+  PL.cruisers = [];              // pursuit cars (entries in SB.vehicles.list)
+  PL._heatTimer = 0;             // simTime when the next heat decay may happen
+  PL._copSpawnAt = 0;            // simTime when cops may next be (re)spawned
+
+  var CRUISER_NAMES = ['MARLIN-11', 'SNAPPER-25', 'TARPON-18'];
+  var HELI_HEIGHT = 36;          // cone height from the engine (radius 5, height 36)
+  var HELI_ORBIT_R = 24;         // heli orbit radius around the hero
+  var CHASE_SPEED = 18;          // cruiser pursuit speed (m/s)
+
+  function simNow() {
+    return (SB.state && typeof SB.state.simTime === 'number') ? SB.state.simTime : 0;
+  }
+  function groundY(x, z) {
+    return (SB.city && typeof SB.city.groundAt === 'function') ? SB.city.groundAt(x, z) : 0;
+  }
+  function scene() {
+    return (SB.engine && SB.engine.scene) || null;
+  }
+  function lambert(color) {
+    return new THREE.MeshLambertMaterial({ color: color });
+  }
+  function heroPos() {
+    if (SB.player && typeof SB.player.pos === 'function') return SB.player.pos();
+    if (SB.engine && typeof SB.engine.heroPos === 'function') return SB.engine.heroPos();
+    return [0, 40];
+  }
+
+  // ---- wanted level (authoritative; SB.state.heat is the mirror) ----
+  PL.stars = function () {
+    return PL._stars;
+  };
+  PL.setStars = function (n) {
+    var v = Math.max(0, Math.min(5, Math.floor(n) || 0));
+    PL._stars = v;
+    if (SB.state) SB.state.heat = v;
+    PL._heatTimer = simNow() + 30; // no decay for the next 30 s of sim time
+    return v;
+  };
+
+  // ---- helicopter mesh: white body + red stripe, tail, spinning rotor, lights ----
+  // Built as a real helicopter, NOT a black block silhouette.
+  function makeHeliMesh() {
+    var g = new THREE.Group();
+    var white = lambert(0xf2f4f6);
+    var red = lambert(0xc22a2a);
+    var dark = lambert(0x1c2733);
+    var glass = lambert(0x9fc4d8);
+
+    var body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.5, 3.6), white);
+    body.position.y = 0;
+    var nose = new THREE.Mesh(new THREE.BoxGeometry(1.9, 1.1, 1.0), glass);
+    nose.position.set(0, -0.1, 2.1);
+    var stripe = new THREE.Mesh(new THREE.BoxGeometry(2.24, 0.28, 3.62), red);
+    stripe.position.y = -0.35;
+    var tail = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 4.2), white);
+    tail.position.set(0, 0.25, -3.6);
+    var fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.4, 0.9), red);
+    fin.position.set(0, 0.8, -5.4);
+    var tailRotor = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.6, 0.3), dark);
+    tailRotor.position.set(0.32, 0.5, -5.5);
+
+    // Main rotor: long thin blades on a mast; spun from simTime in update().
+    var rotor = new THREE.Group();
+    rotor.position.y = 1.0;
+    var blade = new THREE.Mesh(new THREE.BoxGeometry(9.0, 0.07, 0.45), dark);
+    rotor.add(blade);
+    var blade2 = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.07, 9.0), dark);
+    rotor.add(blade2);
+    var mast = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.5, 8), dark);
+    mast.position.y = 0.8;
+
+    // Skids.
+    var skidL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 3.4), dark);
+    skidL.position.set(-0.85, -1.0, 0.3);
+    var skidR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 3.4), dark);
+    skidR.position.set(0.85, -1.0, 0.3);
+
+    // Navigation lights: red (port), green (starboard), white strobe (tail).
+    var navR = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xff2222 }));
+    navR.position.set(-1.15, 0, 0.5);
+    var navG = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0x22ff66 }));
+    navG.position.set(1.15, 0, 0.5);
+    var strobe = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    strobe.position.set(0, 0.2, -5.8);
+
+    g.add(body); g.add(nose); g.add(stripe); g.add(tail); g.add(fin);
+    g.add(tailRotor); g.add(rotor); g.add(mast);
+    g.add(skidL); g.add(skidR); g.add(navR); g.add(navG); g.add(strobe);
+    g.userData.rotor = rotor;
+    g.userData.tailRotor = tailRotor;
+    g.userData.isHeli = true;
+    return g;
+  }
+
+  PL._ensureHeli = function () {
+    if (PL.heli) return PL.heli;
+    var sc = scene();
+    if (!sc) return null;
+    PL.heli = makeHeliMesh();
+    PL.heli.visible = false;
+    sc.add(PL.heli);
+    // Spotlight cone from the engine (opacity 0.10 — never change it).
+    if (SB.engine && typeof SB.engine.spotCone === 'function') {
+      try {
+        PL._cone = SB.engine.spotCone();
+        PL._cone.visible = false;
+        sc.add(PL._cone);
+      } catch (e) { PL._cone = null; }
+    }
+    return PL.heli;
+  };
+
+  // ---- police cruiser (white body, black hood, roof light bar) ----
+  function makeCruiserMesh() {
+    var g = new THREE.Group();
+    var white = lambert(0xf2f4f6);
+    var black = lambert(0x14181d);
+    var glass = lambert(0x101820);
+    var tyre = lambert(0x111111);
+
+    var body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.55, 4.2), white);
+    body.position.y = 0.55;
+    var cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.5, 2.1), white);
+    cabin.position.set(0, 1.05, -0.25);
+    var hood = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.1, 1.2), black);
+    hood.position.set(0, 0.86, 1.4);
+    var windshield = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.42, 0.08), glass);
+    windshield.position.set(0, 1.02, 0.82);
+    windshield.rotation.x = -0.35;
+
+    // Roof light bar: red left, blue right.
+    var barBase = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.12, 0.3), black);
+    barBase.position.set(0, 1.36, -0.25);
+    var barR = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.32),
+      new THREE.MeshBasicMaterial({ color: 0xff2222 }));
+    barR.position.set(-0.28, 1.38, -0.25);
+    var barB = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.32),
+      new THREE.MeshBasicMaterial({ color: 0x2244ff }));
+    barB.position.set(0.28, 1.38, -0.25);
+
+    g.add(body); g.add(cabin); g.add(hood); g.add(windshield);
+    g.add(barBase); g.add(barR); g.add(barB);
+
+    var wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.24, 12);
+    var wpos = [[-0.95, 1.35], [0.95, 1.35], [-0.95, -1.35], [0.95, -1.35]];
+    for (var i = 0; i < 4; i++) {
+      var w = new THREE.Mesh(wheelGeo, tyre);
+      w.rotation.z = Math.PI / 2;
+      w.position.set(wpos[i][0], 0.34, wpos[i][1]);
+      g.add(w);
+    }
+    g.userData.speed = 0;
+    g.userData.heading = Math.PI;
+    g.userData.isCruiser = true;
+    return g;
+  }
+
+  PL._spawnCruiser = function (name, x, z) {
+    var sc = scene();
+    if (!sc) return null;
+    var mesh = makeCruiserMesh();
+    mesh.position.set(x, groundY(x, z), z);
+    mesh.rotation.y = Math.PI;
+    mesh.userData.heading = Math.PI;
+    mesh.userData.speed = 0;
+    mesh.userData.unitName = name;
+    sc.add(mesh);
+    var entry = { mesh: mesh, name: name, cond: 100, color: '#f2f4f6', parked: false };
+    if (SB.vehicles && SB.vehicles.list) SB.vehicles.list.push(entry);
+    PL.cruisers.push(entry);
+    return entry;
+  };
+
+  // ---- foot cop mesh (navy uniform + cap). userData flags make it killable. ----
+  function makeCopMesh() {
+    var g = new THREE.Group();
+    var navy = lambert(0x1d2f4a);
+    var dark = lambert(0x14181d);
+    var skin = lambert(0xd9a066);
+
+    var legL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.52, 0.18), navy);
+    legL.position.set(-0.11, 0.26, 0);
+    var legR = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.52, 0.18), navy);
+    legR.position.set(0.11, 0.26, 0);
+    var torso = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.62, 0.3), navy);
+    torso.position.y = 0.85;
+    var vest = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.3, 0.32), dark);
+    vest.position.y = 0.9;
+    var armL = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.56, 0.16), navy);
+    armL.position.set(-0.34, 0.86, 0);
+    var armR = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.56, 0.16), navy);
+    armR.position.set(0.34, 0.86, 0);
+    var head = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), skin);
+    head.position.y = 1.34;
+    var cap = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.34), dark);
+    cap.position.y = 1.52;
+
+    g.add(legL); g.add(legR); g.add(torso); g.add(vest);
+    g.add(armL); g.add(armR); g.add(head); g.add(cap);
+    g.userData.hp = 100;
+    g.userData.isCop = true;
+    g.userData.dead = false;
+    return g;
+  }
+
+  PL._spawnCops = function (count) {
+    var sc = scene();
+    if (!sc) return;
+    var hp = heroPos();
+    var now = simNow();
+    if (now < PL._copSpawnAt) return;
+    PL._copSpawnAt = now + 5; // at most one spawn wave per 5 s of sim time
+    for (var i = 0; i < count; i++) {
+      if (PL.cops.length >= 6) return;
+      var ang = i * 2.4 + 0.7; // deterministic spread around the hero
+      var x = hp[0] + Math.cos(ang) * 18;
+      var z = hp[1] + Math.sin(ang) * 18;
+      var cop = makeCopMesh();
+      cop.position.set(x, groundY(x, z), z);
+      cop.userData.spawnAngle = ang;
+      sc.add(cop);
+      PL.cops.push(cop);
+    }
+  };
+
+  PL._clearCops = function () {
+    var sc = scene();
+    for (var i = 0; i < PL.cops.length; i++) {
+      if (sc) sc.remove(PL.cops[i]);
+    }
+    PL.cops = [];
+  };
+
+  // ---- per-tick police AI (called ONLY by SB.engine.step) ----
+  PL.update = function (dt) {
+    if (!dt || dt <= 0) return;
+    var now = simNow();
+    var hp = heroPos();
+    var stars = PL._stars;
+
+    // Heat decay: one star per 30 s of quiet sim time.
+    if (stars > 0 && now >= PL._heatTimer) {
+      PL.setStars(stars - 1);
+      stars = PL._stars;
+    }
+
+    // Helicopter: visible at 3+ stars; orbits the hero, rotor spins with simTime.
+    var heli = PL._ensureHeli();
+    var showHeli = stars >= 3;
+    if (heli) {
+      heli.visible = showHeli;
+      if (showHeli) {
+        var ang = now * 0.15 + 0.8; // deterministic orbit from simTime
+        var hx = hp[0] + Math.cos(ang) * HELI_ORBIT_R;
+        var hz = hp[1] + Math.sin(ang) * HELI_ORBIT_R;
+        heli.position.set(hx, HELI_HEIGHT, hz);
+        heli.rotation.y = Math.atan2(hp[0] - hx, hp[1] - hz);
+        if (heli.userData.rotor) heli.userData.rotor.rotation.y = now * 25;
+        if (heli.userData.tailRotor) heli.userData.tailRotor.rotation.z = now * 30;
+      }
+    }
+    // Spotlight cone: vertical beam centred on the hero (apex up at heli height).
+    if (PL._cone) {
+      PL._cone.visible = showHeli;
+      if (showHeli) {
+        PL._cone.position.set(hp[0], HELI_HEIGHT / 2, hp[1]);
+        PL._cone.rotation.set(0, 0, 0);
+      }
+    }
+    if (SB.state) SB.state.inSight = showHeli && stars >= 4;
+
+    // Cruisers: chase the hero while wanted.
+    var i, c, m, ud;
+    if (stars > 0) {
+      var want = Math.min(stars, 3);
+      while (PL.cruisers.length < want) {
+        var idx = PL.cruisers.length % CRUISER_NAMES.length;
+        var sx = hp[0] + 30 + PL.cruisers.length * 12;
+        var sz = hp[1] + 20;
+        PL._spawnCruiser(CRUISER_NAMES[idx], sx, sz);
+      }
+    }
+    for (i = 0; i < PL.cruisers.length; i++) {
+      c = PL.cruisers[i]; m = c.mesh; ud = m.userData;
+      if (stars === 0) { ud.speed = 0; continue; }
+      var dx = hp[0] - m.position.x, dz = hp[1] - m.position.z;
+      var dist = Math.sqrt(dx * dx + dz * dz) || 0.01;
+      var wantHeading = Math.atan2(dx, dz);
+      var dh = wantHeading - ud.heading;
+      while (dh > Math.PI) dh -= Math.PI * 2;
+      while (dh < -Math.PI) dh += Math.PI * 2;
+      ud.heading += Math.max(-2.5 * dt, Math.min(2.5 * dt, dh));
+      var target = (dist > 10) ? CHASE_SPEED : 6;
+      ud.speed += (target - ud.speed) * Math.min(1, dt * 1.5);
+      m.position.x += Math.sin(ud.heading) * ud.speed * dt;
+      m.position.z += Math.cos(ud.heading) * ud.speed * dt;
+      m.position.y = groundY(m.position.x, m.position.z);
+      m.rotation.y = ud.heading;
+    }
+
+    // Foot cops: spawn at 2+ stars, walk toward the hero, stop at 2 m.
+    if (stars >= 2) {
+      var alive = 0;
+      for (i = 0; i < PL.cops.length; i++) {
+        if (!PL.cops[i].userData.dead) alive += 1;
+      }
+      if (alive < Math.min(stars, 4)) PL._spawnCops(1);
+      for (i = 0; i < PL.cops.length; i++) {
+        var cop = PL.cops[i];
+        if (cop.userData.dead) continue;
+        var cx = hp[0] - cop.position.x, cz = hp[1] - cop.position.z;
+        var cd = Math.sqrt(cx * cx + cz * cz) || 0.01;
+        if (cd > 2) {
+          var step = Math.min(cd - 2, 3.2 * dt);
+          cop.position.x += (cx / cd) * step;
+          cop.position.z += (cz / cd) * step;
+          cop.position.y = groundY(cop.position.x, cop.position.z);
+          cop.rotation.y = Math.atan2(cx, cz);
+        }
+      }
+    } else if (PL.cops.length) {
+      PL._clearCops();
+    }
+
+    // Response list for the HUD (rebuilt in place each tick).
+    PL.response.length = 0;
+    if (stars > 0) {
+      if (showHeli && heli) {
+        var hdx = hp[0] - heli.position.x, hdz = hp[1] - heli.position.z;
+        PL.response.push({
+          name: 'GULL-1',
+          dist: Math.round(Math.sqrt(hdx * hdx + hdz * hdz)),
+          status: 'SPOTLIGHT'
+        });
+      }
+      for (i = 0; i < PL.cruisers.length; i++) {
+        c = PL.cruisers[i]; m = c.mesh;
+        var cdx = hp[0] - m.position.x, cdz = hp[1] - m.position.z;
+        var cdist = Math.sqrt(cdx * cdx + cdz * cdz);
+        PL.response.push({
+          name: c.name,
+          dist: Math.round(cdist),
+          status: (cdist < 10) ? 'RAMMING' : 'PURSUIT'
+        });
+      }
+    }
+  };
+
+  // ---- BUSTED: hospital fee, heat reset, respawn INSIDE the city ----
+  PL.busted = function () {
+    // Leave the car first so the hero is on foot at the respawn point.
+    if (SB.player && typeof SB.player.exitVehicle === 'function') {
+      try { SB.player.exitVehicle(); } catch (e) {}
+    }
+    // Hospital fee: $50 off the player ledger.
+    if (SB.player && typeof SB.player.cash === 'number') {
+      SB.player.cash = Math.max(0, SB.player.cash - 50);
+    }
+    if (SB.player) SB.player.health = 100;
+    PL.setStars(0);
+    // Hospital only if it is inside the city envelope; otherwise the on-foot
+    // spawn (0,40). NEVER fall back to (-150,250) — that is void (r12 lesson).
+    var hosp = [0, 40];
+    if (SB.city && SB.city.spawnPoints && SB.city.spawnPoints.hospital) {
+      var h = SB.city.spawnPoints.hospital;
+      if (SB._inCity(h[0], h[1])) hosp = [h[0], h[1]];
+    }
+    if (SB.player && typeof SB.player._placeAt === 'function') {
+      SB.player._placeAt(hosp[0], hosp[1], Math.PI);
+    }
+    return hosp;
+  };
+
+  // ---- per-preset setup (called by the player preset wrap) ----
+  PL._onPreset = function (name) {
+    PL._ensureHeli();
+    // Fresh cruisers per preset: drop the old pursuit, keep the list clean.
+    var sc = scene();
+    for (var i = 0; i < PL.cruisers.length; i++) {
+      if (sc) sc.remove(PL.cruisers[i].mesh);
+      if (SB.vehicles && SB.vehicles.list) {
+        var li = SB.vehicles.list.indexOf(PL.cruisers[i]);
+        if (li >= 0) SB.vehicles.list.splice(li, 1);
+      }
+    }
+    PL.cruisers = [];
+    PL._clearCops();
+    PL.response.length = 0;
+
+    if (name === 'cover' || name === 'drive') {
+      PL.setStars(4);
+      // Escort cruisers at the staging offsets (API.md section 4).
+      if (SB.city && SB.city.staging && SB.city.staging.coverCruisers) {
+        var offs = SB.city.staging.coverCruisers;
+        PL._spawnCruiser('MARLIN-11', offs[0][0], offs[0][1]);
+        PL._spawnCruiser('SNAPPER-25', offs[1][0], offs[1][1]);
+      } else {
+        PL._spawnCruiser('MARLIN-11', -5, 4);
+        PL._spawnCruiser('SNAPPER-25', 5.5, 6);
+      }
+    } else if (name === 'onfoot') {
+      PL.setStars(2);
+    } else if (name === 'mission') {
+      PL.setStars(5);
+    } else if (name === 'free' || name === 'map') {
+      PL.setStars(0);
+    }
+  };
+})();
