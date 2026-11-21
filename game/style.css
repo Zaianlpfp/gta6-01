@@ -1,0 +1,385 @@
+/* style.css — Solmar Bay (gta6-01 v4 r14): HUD panel MELAYANG (B4)
+   Ditulis FRESH dari game/API.md §12.
+   ATURAN: TIDAK ADA elemen HUD selebar layar. Tiap panel position:fixed
+   dengan lebar TETAP (276/194/300/204px). Panel-panel adalah anak langsung
+   <body> — tanpa wrapper container 100%. Satu-satunya yang fullscreen
+   adalah canvas game (#game) dan overlay (start screen / peta), yang
+   disembunyikan (display:none) saat mode preset/shot. */
+
+/* Utilitas: dipakai main.js (classList add/remove 'hidden') untuk start
+   screen + tombol Continue. WAJIB ada — tanpa aturan ini 'hidden' tak berefek. */
+.hidden { display: none !important; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #1a1025;
+  color: #f2f0e8;
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Canvas game fullscreen (bukan elemen HUD). */
+#game {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #1a1025;
+}
+
+/* ------------------------------------------------------------------ */
+/* Panel HUD melayang — base (API.md §12)                              */
+/* ------------------------------------------------------------------ */
+.hud-panel {
+  position: fixed;
+  box-sizing: border-box;
+  background: rgba(12, 16, 28, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  color: #f2f0e8;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  z-index: 10;
+  pointer-events: auto;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+}
+
+.hud-title {
+  font-weight: 700;
+  letter-spacing: 2px;
+  font-size: 12px;
+  color: #ffd76a;
+  margin-bottom: 4px;
+}
+
+.hud-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.hud-label {
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #9fb0c8;
+  min-width: 44px;
+}
+
+.hud-num {
+  font-weight: 700;
+  min-width: 28px;
+  text-align: right;
+}
+
+.hud-sub {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #9fb0c8;
+}
+
+.hud-sep {
+  color: #9fb0c8;
+  margin: 0 4px;
+}
+
+/* Posisi TETAP tiap panel (viewport acuan 1280x720, API.md §12).
+   Padding panel misi/crew dibuat ringkas supaya panel misi (top 341)
+   tidak menimpa panel crew (top 472) dan radio tidak menimpa minimap. */
+#hud-status { left: 12px; top: 12px; width: 276px; }
+#hud-wanted { left: calc(100vw - 206px); top: 12px; width: 194px; text-align: right; }
+#hud-mission { left: 12px; top: 341px; width: 300px; padding: 8px 12px; }
+#hud-crew { left: 12px; top: 472px; width: 300px; padding: 8px 12px; }
+#hud-vehicle { left: 12px; top: 269px; width: 300px; }
+#hud-radio {
+  left: calc(100vw - 216px);
+  top: 261px;
+  width: 204px;
+  text-align: center;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* Minimap bundar kanan-bawah. */
+#hud-minimap {
+  left: calc(100vw - 216px);
+  top: 313px;
+  width: 204px;
+  height: 204px;
+  padding: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid rgba(255, 215, 106, 0.6);
+  cursor: pointer;
+}
+#hud-minimap-canvas {
+  display: block;
+  width: 204px;
+  height: 204px;
+}
+
+/* Jam di panel status — HARUS terlihat di tiap scene. */
+.hud-clock-row {
+  justify-content: space-between;
+  margin-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 6px;
+}
+.hud-clock {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #ffd76a;
+}
+.hud-date {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #9fb0c8;
+}
+
+/* Bar health / armor / kondisi kendaraan. */
+.bar {
+  flex: 1;
+  height: 10px;
+  background: #232a3a;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.bar .fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.15s linear;
+}
+.bar-health .fill { background: #58d68d; }
+.bar-armor .fill { background: #4da3ff; }
+.bar-cond .fill { background: #58d68d; }
+
+/* Wanted + cash kanan-atas. */
+.hud-stars {
+  font-size: 20px;
+  letter-spacing: 3px;
+  color: #ffd76a;
+  line-height: 1.2;
+}
+.hud-cash {
+  font-size: 20px;
+  font-weight: 700;
+  color: #58d68d;
+}
+
+/* Panel misi aktif (format TETAP API.md §12, tanpa titik-dua). */
+.hud-mission-name {
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 1.25;
+  letter-spacing: 1px;
+  color: #ffd76a;
+  margin-bottom: 2px;
+}
+.hm-row { margin: 1px 0; font-size: 12px; line-height: 1.3; }
+.hm-label {
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #9fb0c8;
+}
+
+/* Panel crew. */
+.crew-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 1px 0;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.crew-dot { font-size: 10px; }
+.crew-dot.ready { color: #58d68d; }
+.crew-dot.busy { color: #8a8f9c; }
+.crew-name { font-weight: 700; }
+.crew-role { color: #9fb0c8; font-size: 12px; }
+.crew-state {
+  margin-left: auto;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: #9fb0c8;
+}
+.hud-rep {
+  margin-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 4px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  font-size: 12px;
+}
+.hud-rep #hud-rank { color: #ffd76a; }
+
+/* Radio widget. */
+.hud-radio-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 215, 106, 0.45);
+  color: #ffd76a;
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  max-width: 130px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hud-radio-btn:hover { background: rgba(255, 215, 106, 0.12); }
+#hud-radio .hud-sub { margin-top: 0; }
+
+/* Panel kendaraan. */
+#hud-vehicle-dented { font-weight: 700; }
+
+/* ------------------------------------------------------------------ */
+/* Dialog tengah-bawah (diisi SB.dialog, dialog.js)                    */
+/* ------------------------------------------------------------------ */
+#hud-dialog {
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 24px;
+  top: auto;
+  width: 620px;
+  max-width: calc(100vw - 40px);
+  display: none;
+  align-items: center;
+  gap: 12px;
+}
+#hud-dialog .dlg-portrait {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid rgba(255, 215, 106, 0.6);
+  flex-shrink: 0;
+}
+#hud-dialog .dlg-portrait.dlg-initial {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #3a2b52;
+  color: #ffd76a;
+  font-size: 26px;
+  font-weight: 800;
+}
+#hud-dialog .dlg-body { min-width: 0; }
+#hud-dialog .dlg-name {
+  font-weight: 800;
+  color: #ffd76a;
+  letter-spacing: 1px;
+  font-size: 13px;
+}
+#hud-dialog .dlg-text { font-size: 14px; }
+
+/* ------------------------------------------------------------------ */
+/* Peta penuh (map.js)                                                 */
+/* ------------------------------------------------------------------ */
+.map-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 18, 0.85);
+  z-index: 40;
+}
+.map-box { text-align: center; }
+.map-title {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 3px;
+  color: #ffd76a;
+  margin-bottom: 10px;
+}
+.map-hint {
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 1px;
+  color: #9fb0c8;
+}
+#map-canvas {
+  display: block;
+  border: 2px solid rgba(255, 215, 106, 0.5);
+  border-radius: 12px;
+  background: #22303f;
+  max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 120px);
+}
+.map-legend {
+  margin-top: 10px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: #c8d0de;
+}
+
+/* ------------------------------------------------------------------ */
+/* Start screen (API.md §15)                                          */
+/* ------------------------------------------------------------------ */
+#start-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(26, 16, 37, 0.92), rgba(12, 16, 28, 0.94));
+  z-index: 50;
+  padding: 20px;
+}
+#start-screen h1 {
+  font-size: 56px;
+  letter-spacing: 8px;
+  color: #ffd76a;
+  margin: 0 0 8px 0;
+}
+#start-screen .tagline {
+  font-size: 15px;
+  letter-spacing: 2px;
+  color: #c8d0de;
+  margin-bottom: 28px;
+}
+#start-screen .press-enter {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #f2f0e8;
+  margin-bottom: 24px;
+}
+#start-screen .controls {
+  font-size: 13px;
+  line-height: 1.9;
+  color: #9fb0c8;
+  max-width: 520px;
+}
+#start-screen .controls b { color: #f2f0e8; }
+#start-screen kbd {
+  background: #232a3a;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: inherit;
+}
+#start-continue {
+  margin-top: 20px;
+  background: #ffd76a;
+  color: #1a1025;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 22px;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}

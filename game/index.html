@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solmar Bay — GTA-style open world</title>
+<link rel="stylesheet" href="./style.css">
+<script type="importmap">{"imports": {"three": "./vendor/three.min.js"}}</script>
+</head>
+<body>
+<!-- Canvas game fullscreen -->
+<canvas id="game"></canvas>
+
+<!-- ================================================================
+     HUD panel MELAYANG (API.md §12). Tiap panel position:fixed dengan
+     lebar TETAP — TANPA elemen selebar layar, tanpa wrapper container.
+     Isi panel diupdate SB.hud (hud.js); dialog diisi SB.dialog.
+     ================================================================ -->
+
+<!-- Status kiri-atas: health + armor + jam + tanggal -->
+<div class="hud-panel" id="hud-status">
+  <div class="hud-title">SOLMAR BAY</div>
+  <div class="hud-row"><span class="hud-label">HEALTH</span>
+    <div class="bar bar-health"><div class="fill" id="hud-health-fill" style="width:100%"></div></div>
+    <span class="hud-num" id="hud-health-num">100</span></div>
+  <div class="hud-row"><span class="hud-label">ARMOR</span>
+    <div class="bar bar-armor"><div class="fill" id="hud-armor-fill" style="width:0%"></div></div>
+    <span class="hud-num" id="hud-armor-num">0</span></div>
+  <div class="hud-row hud-clock-row"><span class="hud-clock" id="hud-clock">17:24</span>
+    <span class="hud-date" id="hud-date">21 NOV 2026</span></div>
+</div>
+
+<!-- Wanted + cash kanan-atas -->
+<div class="hud-panel" id="hud-wanted">
+  <div class="hud-stars" id="hud-stars">☆☆☆☆☆</div>
+  <div class="hud-cash" id="hud-cash">$500</div>
+  <div class="hud-sub" id="hud-heat-label">CLEAN</div>
+</div>
+
+<!-- Misi aktif kiri-bawah (format TETAP API.md §12, tanpa titik-dua) -->
+<div class="hud-panel" id="hud-mission">
+  <div class="hud-mission-name" id="hud-mission-name">NO ACTIVE MISSION</div>
+  <div class="hm-row" id="hud-mission-stage-row" style="display:none"><span class="hm-label">STAGE</span> <span id="hud-mission-stage"></span></div>
+  <div class="hm-row" id="hud-mission-next-row" style="display:none"><span class="hm-label">NEXT</span> <span id="hud-mission-next"></span></div>
+  <div class="hm-row" id="hud-mission-timer-row" style="display:none"><span class="hm-label">TIMER</span> <span id="hud-mission-timer"></span></div>
+  <div class="hm-row" id="hud-mission-payout-row" style="display:none"><span class="hm-label">PAYOUT</span> <span id="hud-mission-payout"></span></div>
+  <div class="hm-row" id="hud-mission-gps-row" style="display:none"><span class="hm-label">GPS</span> <span id="hud-mission-gps"></span></div>
+</div>
+
+<!-- Crew kiri-bawah (di bawah misi) + REP/rank -->
+<div class="hud-panel" id="hud-crew">
+  <div class="hud-title">CREW</div>
+  <div id="hud-crew-list"></div>
+  <div class="hud-rep"><span id="hud-rep">REP 0</span><span class="hud-sep">•</span><span id="hud-rank">ROOKIE</span></div>
+</div>
+
+<!-- Kendaraan kiri-bawah (di atas misi bila inVehicle) -->
+<div class="hud-panel" id="hud-vehicle" style="display:none">
+  <div class="hud-title">VEHICLE <span id="hud-vehicle-name">Flamingo GT</span></div>
+  <div class="hud-row"><span class="hud-label">COND</span>
+    <div class="bar bar-cond"><div class="fill" id="hud-vehicle-cond-fill" style="width:100%"></div></div>
+    <span class="hud-num" id="hud-vehicle-cond-num">100</span></div>
+  <div class="hud-row"><span class="hud-label">STATUS</span> <span id="hud-vehicle-dented">OK</span></div>
+</div>
+
+<!-- Radio widget kanan-bawah di atas minimap -->
+<div class="hud-panel" id="hud-radio">
+  <button class="hud-radio-btn" id="hud-radio-next" title="Ganti stasiun (R)">♪ <span id="hud-radio-name">SOLMAR FM</span></button>
+  <div class="hud-sub" id="hud-radio-genre">pop</div>
+</div>
+
+<!-- Minimap bundar kanan-bawah (klik = peta penuh) -->
+<div class="hud-panel hud-minimap" id="hud-minimap" title="Klik untuk peta penuh (M)">
+  <canvas id="hud-minimap-canvas" width="204" height="204"></canvas>
+</div>
+
+<!-- Dialog tengah-bawah (diisi SB.dialog, dialog.js) -->
+<div class="hud-panel hud-dialog" id="hud-dialog" style="display:none"></div>
+
+<!-- Peta penuh (map.js) -->
+<div class="map-overlay" id="map-overlay" style="display:none">
+  <div class="map-box">
+    <div class="map-title">SOLMAR BAY <span class="map-hint">M / klik untuk menutup</span></div>
+    <canvas id="map-canvas" width="720" height="560"></canvas>
+    <div class="map-legend">● HERO &nbsp; ◆ OBJECTIVE &nbsp; ● POLISI &nbsp; ● TRAFFIC &nbsp; ★ BANK</div>
+  </div>
+</div>
+
+<!-- Start screen (API.md §15) -->
+<div id="start-screen">
+  <h1>SOLMAR BAY</h1>
+  <div class="tagline">KOTA PANTAI • 9 DISTRIK • 8 MISI • 1 PELUANG BESAR</div>
+  <div class="press-enter">PRESS ENTER TO PLAY</div>
+  <div class="controls">
+    <b>WASD</b> gerak / drive &nbsp;•&nbsp; <b>Shift</b> lari &nbsp;•&nbsp; <b>Space</b> lompat / handbrake<br>
+    <b>E</b> masuk / keluar mobil &nbsp;•&nbsp; <b>F</b> tembak &nbsp;•&nbsp; <b>M</b> peta<br>
+    <b>R</b> ganti radio &nbsp;•&nbsp; <b>P</b> pause &nbsp;•&nbsp; <b>1–8</b> mulai misi
+  </div>
+  <button id="btn-continue" class="hidden">CONTINUE</button>
+</div>
+
+<script>
+  // Defensif: mode preset/shot (?preset= / ?shot=) langsung masuk game —
+  // start screen disembunyikan supaya canvas + HUD terlihat di screenshot.
+  // Load biasa (tanpa param) tetap menampilkan start screen; ENTER ditangani main.js.
+  (function () {
+    var q = new URLSearchParams(window.location.search);
+    if (q.has('preset') || q.has('shot')) {
+      var s = document.getElementById('start-screen');
+      if (s) s.style.display = 'none';
+    }
+  })();
+</script>
+<!-- Entrypoint game (B5, main.js): SB.hud.init() DULU lalu bootFromQuery(),
+     lalu loop rAF sendiri dengan dt cap 1,0 (API.md §14). -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>
